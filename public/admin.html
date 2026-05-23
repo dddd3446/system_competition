@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>武术比赛总指挥中心</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+    <style>
+        :root { --bg: #0f172a; --card: #1e293b; --text: #f8fafc; --accent: #38bdf8; --success: #22c55e; --danger: #ef4444; }
+        body { font-family: sans-serif; background: var(--bg); color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        
+        /* 左侧：整块设定区，统一纵向滚动 */
+        .sidebar {
+            width: 480px; flex-shrink: 0; height: 100vh; overflow-y: auto; overflow-x: hidden;
+            box-sizing: border-box; background: #0f172a; border-right: 1px solid #334155;
+        }
+        .sidebar-settings {
+            display: flex; flex-direction: column; gap: 12px;
+            padding: 12px 15px 20px; min-height: 100%;
+            box-sizing: border-box;
+        }
+        .athlete-pool-section {
+            display: flex; flex-direction: column; gap: 0;
+            margin-top: 4px; padding-top: 12px; border-top: 1px solid #475569;
+        }
+        .athlete-list-panel {
+            padding: 0; margin-top: 6px; min-height: 520px;
+            border: 1px solid #334155; border-radius: 8px; background: #1e293b;
+        }
+        .main-content { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+        input[type="text"], input[type="number"], select, button, textarea { background: #0f172a; border: 1px solid #334155; color: white; padding: 10px; border-radius: 6px; width: 100%; box-sizing: border-box; margin-bottom: 8px; font-family: inherit;}
+        button { cursor: pointer; font-weight: bold; background: var(--accent); color: #000; border: none; }
+        button:hover { opacity: 0.8; }
+        table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 8px; overflow: hidden; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #334155; }
+        th { color: #94a3b8; }
+        .btn-sm { width: auto; padding: 6px 12px; font-size: 0.85rem; margin: 0 2px; }
+        .btn-edit { background: #f59e0b; color: #000; }
+        .btn-push { background: var(--success); color: #000; }
+        .btn-delete { background: var(--danger); color: white; }
+        .card { background: var(--card); padding: 15px; border-radius: 8px; }
+        .warning-row { background-color: rgba(239, 68, 68, 0.15) !important; border-left: 4px solid var(--danger); }
+        .athlete-row { display: flex; align-items: center; justify-content: space-between; padding: 10px; border-bottom: 1px solid #334155; }
+        .athlete-row:hover { background: #0f172a; }
+        
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 999; }
+        .modal-box { display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--card); padding: 25px; border-radius: 10px; z-index: 1000; width: 350px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); border: 2px solid var(--accent); }
+        
+        .ghost-drag { opacity: 0.4; background: #38bdf8 !important; }
+        .drag-item { cursor: grab; background: #0f172a; padding: 6px 10px; margin-bottom: 4px; border-radius: 4px; border-left: 3px solid #f59e0b; display: flex; justify-content: space-between; align-items: center; }
+        .drag-item:active { cursor: grabbing; }
+
+        .judge-dispatch-card { border: 2px solid #a855f7; background: rgba(168, 85, 247, 0.05); padding: 12px; }
+        .judge-dispatch-card h4 { margin: 0 0 12px 0; color: #c084fc; font-size: 0.95rem; }
+        .judge-row { display: flex; align-items: center; gap: 8px; padding: 10px 4px; border-bottom: 1px solid #334155; }
+        .judge-row:last-child { border-bottom: none; }
+        .judge-status-wrap { display: flex; align-items: center; gap: 6px; min-width: 108px; flex-shrink: 0; }
+        .judge-status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .judge-status-dot.online { background: #35CF96; box-shadow: 0 0 6px rgba(34, 211, 238, 0.6); }
+        .judge-status-dot.offline { background: #dc2626; box-shadow: 0 0 4px rgba(220, 38, 38, 0.4); }
+        .judge-pin { font-weight: 700; font-size: 0.88rem; letter-spacing: 0.02em; white-space: nowrap; }
+        .judge-pin.online { color: #35CF96; }
+        .judge-pin.offline { color: #dc2626; }
+        .judge-pill-select {
+            flex: 1; min-width: 0; margin: 0; padding: 7px 10px;
+            border: none; border-radius: 999px;
+            background: #a5b4fc; color: #1e1b4b;
+            font-size: 0.78rem; font-weight: 600; cursor: pointer;
+            text-align: center; text-align-last: center;
+            appearance: none; -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath fill='%231e1b4b' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 10px center;
+            padding-right: 24px;
+        }
+        .judge-pill-select option { background: #1e293b; color: #f8fafc; }
+        .judge-icon-btn {
+            width: 34px; height: 34px; min-width: 34px; padding: 0; margin: 0;
+            border: none; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            font-size: 1rem; font-weight: bold; cursor: pointer; flex-shrink: 0;
+        }
+        .judge-icon-btn:hover { opacity: 0.85; transform: scale(1.05); }
+        .judge-btn-dispatch { background: #67e8f9; color: #0f172a; }
+        .judge-btn-delete { background: #fca5a5; color: #7f1d1d; }
+        .judge-empty { text-align: center; color: #64748b; font-size: 0.85rem; padding: 16px 8px; }
+
+        .catalog-card { border: 2px solid #f59e0b; background: rgba(245, 158, 11, 0.05); padding: 10px; flex-shrink: 0; }
+        .catalog-card h4 { margin: 0 0 8px 0; color: #fbbf24; font-size: 0.9rem; }
+        .catalog-scroll {
+            max-height: 200px; overflow-y: auto;
+            border: 1px solid #334155; border-radius: 6px; background: #0f172a;
+        }
+        .catalog-table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
+        .catalog-table th { position: sticky; top: 0; background: #1e293b; color: #94a3b8; padding: 6px 4px; z-index: 1; font-weight: 600; }
+        .catalog-table td { padding: 5px 4px; border-bottom: 1px solid #334155; vertical-align: middle; }
+        .catalog-table tr:hover td { background: rgba(56, 189, 248, 0.06); }
+        .catalog-event { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .catalog-extracted { color: #94a3b8; max-width: 72px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .catalog-category-select { width: 100%; margin: 0; padding: 4px 2px; font-size: 0.72rem; border-radius: 4px; border: 1px solid #475569; background: #1e293b; color: #f8fafc; }
+        .catalog-category-select.overridden { border-color: #f59e0b; }
+        .catalog-category-select.is-unclassified {
+            color: #ef4444; border-color: #ef4444; font-weight: 700;
+            background-color: rgba(239, 68, 68, 0.12);
+        }
+        tr.catalog-row-unclassified td { color: #fca5a5; }
+        tr.catalog-row-unclassified .catalog-extracted { color: #ef4444; font-weight: 600; }
+        .catalog-tag-auto { font-size: 0.65rem; color: #64748b; display: block; margin-top: 1px; }
+
+        .ranking-card { border-left: 4px solid var(--accent); }
+        .ranking-tabs { display: flex; gap: 0; margin-bottom: 14px; border-bottom: 2px solid #334155; }
+        .ranking-tab {
+            flex: 1; width: auto; margin: 0 0 -2px 0; padding: 10px 14px; border: none; border-radius: 8px 8px 0 0;
+            background: transparent; color: #94a3b8; font-size: 0.9rem; font-weight: 600;
+            cursor: pointer; border-bottom: 3px solid transparent;
+        }
+        .ranking-toolbar select,
+        .ranking-toolbar button,
+        .ranking-toolbar label { margin-bottom: 0; }
+        .ranking-tab:hover { color: #e2e8f0; background: rgba(56, 189, 248, 0.08); }
+        .ranking-tab.active { color: var(--accent); border-bottom-color: var(--accent); background: rgba(56, 189, 248, 0.12); }
+        .ranking-tab.active.rank-tab-u { color: #c084fc; border-bottom-color: #a855f7; background: rgba(168, 85, 247, 0.12); }
+        .ranking-panel { display: none; }
+        .ranking-panel.active { display: block; }
+        .ranking-toolbar { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 12px; }
+    </style>
+</head>
+<body>
+    <datalist id="eventOptionsList"></datalist>
+
+    <div class="modal-overlay" id="modalOverlay"></div>
+    <div class="modal-box" id="editModal">
+        <h3 id="modalTitle" style="margin-top:0; color:var(--accent);">✏️ 编辑选手资料</h3>
+        <input type="hidden" id="modalEditId">
+        <label style="font-size: 0.85rem; color:#94a3b8;">参赛项目</label>
+        <input type="text" id="modalEditEvent" list="eventOptionsList" placeholder="打字或点击箭头选择..." autocomplete="off">
+        <label style="font-size: 0.85rem; color:#94a3b8; margin-top:5px; display:block;">选手姓名</label>
+        <input type="text" id="modalEditAthlete" placeholder="例: 张三">
+        <div style="display:flex; gap:10px; margin-top:15px;">
+            <button onclick="submitEdit()" style="flex:2;">💾 储存修改</button>
+            <button onclick="closeModal()" style="flex:1; background:#475569; color:white;">取消</button>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <div class="sidebar-settings">
+        <div class="card judge-dispatch-card">
+            <h4><i class="fa-solid fa-mobile-screen"></i> 裁判设备派发中心</h4>
+            <div id="judgesList"></div>
+        </div>
+
+        <div class="card catalog-card">
+            <h4><i class="fa-solid fa-list-check"></i> 项目分类清单</h4>
+            <input type="text" id="catalogSearch" placeholder="🔍 筛选项目…" oninput="renderEventCatalog()" style="padding:6px; font-size:0.8rem; margin-bottom:6px;">
+            <div class="catalog-scroll">
+                <table class="catalog-table">
+                    <thead>
+                        <tr>
+                            <th>项目</th>
+                            <th>萃取</th>
+                            <th width="88">分类</th>
+                        </tr>
+                    </thead>
+                    <tbody id="eventCatalogBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div style="display:flex; gap:8px;">
+            <div class="card" style="border: 1px dashed #f59e0b; flex:1; padding:10px;">
+                <h4 style="margin:0 0 8px 0; color: #f59e0b; font-size:0.85rem;"><i class="fa-solid fa-map-location-dot"></i> 新增场地</h4>
+                <input type="text" id="newCourtInput" placeholder="场地名" style="padding:6px; font-size:0.85rem; margin-bottom:4px;">
+                <button onclick="addCourt()" style="background: #f59e0b; padding:6px; font-size:0.85rem;">新增</button>
+            </div>
+            <div class="card" style="border: 2px solid var(--success); background: rgba(34, 197, 94, 0.05); flex:1.3; padding:10px;">
+                <h4 style="margin:0 0 8px 0; color:var(--success); font-size:0.85rem;"><i class="fa-solid fa-paper-plane"></i> 批次发送</h4>
+                <div style="display:flex; gap:4px; margin-bottom:4px;">
+                    <select id="batchCourt" style="margin:0; padding:6px; font-size:0.8rem;"></select>
+                    <select id="batchJudgeCount" style="margin:0; padding:6px; font-size:0.8rem; width: 80px;"><option value="3">3人</option><option value="5">5人</option></select>
+                </div>
+                <button onclick="batchSend()" class="btn-push" style="width:100%; padding:6px; font-size:0.85rem;">🚀 发送</button>
+            </div>
+        </div>
+
+        <div class="card" style="padding:10px; display:flex; gap:8px;">
+            <div style="flex:1;">
+                <h4 style="margin:0 0 8px 0; font-size:0.85rem; color:var(--accent);">单笔录入</h4>
+                <input type="hidden" id="editId">
+                <input type="text" id="editEvent" list="eventOptionsList" placeholder="项目" style="padding:6px; font-size:0.8rem; margin-bottom:4px;" autocomplete="off">
+                <input type="text" id="editAthlete" placeholder="姓名" style="padding:6px; font-size:0.8rem; margin-bottom:4px;">
+                <button onclick="saveAthlete()" style="padding:6px; font-size:0.85rem;">💾 储存</button>
+            </div>
+            <div style="flex:1; border-left: 1px solid #334155; padding-left:8px;">
+                <h4 style="margin:0 0 8px 0; font-size:0.85rem; color:var(--success);">Excel 汇入</h4>
+                <textarea id="importData" rows="3" placeholder="复制贴上..." style="padding:6px; font-size:0.8rem; resize:none; margin-bottom:4px;"></textarea>
+                <button onclick="importAthletesFromText()" style="background: var(--success); color: black; padding:6px; font-size:0.85rem;">📥 汇入</button>
+            </div>
+        </div>
+
+        <div class="athlete-pool-section">
+            <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 5px; flex-shrink: 0;">
+                <h4 style="margin: 0 0 8px 0; font-size:0.9rem;"><i class="fa-solid fa-users-line"></i> 等待库 (<span id="totalAthletes" style="color:var(--accent);">0</span>)</h4>
+                <div style="margin-bottom: 8px;">
+                    <button onclick="selectAllAthletes()" class="btn-sm" style="background:#334155; color:white; padding: 4px 8px;">全选</button>
+                    <button onclick="deselectAllAthletes()" class="btn-sm" style="background:#334155; color:white; padding: 4px 8px;">取消</button>
+                </div>
+            </div>
+            <select id="filterAthleteEvent" onchange="updateUI()" style="border-color: var(--accent); background: #1e293b; font-weight: bold; font-size: 0.9rem; padding: 8px; flex-shrink: 0;"></select>
+            <input type="text" id="searchBar" placeholder="🔍 关键字搜寻..." onkeyup="updateUI()" style="border-color: var(--accent); padding: 8px; font-size: 0.9rem; flex-shrink: 0;">
+            <div id="athleteListHTML" class="card athlete-list-panel"></div>
+        </div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div id="court-monitors"></div>
+
+        <div class="card ranking-card">
+            <div class="ranking-tabs">
+                <button type="button" class="ranking-tab active" id="rankTabLeaderboard" onclick="switchRankingTab('leaderboard')">
+                    <i class="fa-solid fa-trophy"></i> 总排行榜
+                </button>
+                <button type="button" class="ranking-tab rank-tab-u" id="rankTabCombined" onclick="switchRankingTab('combined')">
+                    <i class="fa-solid fa-ranking-star"></i> 综合排名 (U 组 · 双项)
+                </button>
+            </div>
+
+            <div id="rankPanelLeaderboard" class="ranking-panel active">
+                <div class="ranking-toolbar">
+                    <select id="filterEvent" onchange="updateUI()" style="width: 260px; margin: 0; background: var(--accent); color: #000; font-weight: bold;"></select>
+                </div>
+                <table>
+                    <thead><tr><th width="50">排名</th><th>项目</th><th>选手</th><th>📝 分数详情 (含裁判长)</th><th width="100">最终得分</th><th width="60">操作</th></tr></thead>
+                    <tbody id="leaderboardBody"></tbody>
+                </table>
+            </div>
+
+            <div id="rankPanelCombined" class="ranking-panel">
+                <div class="ranking-toolbar">
+                    <label style="font-size:0.85rem; color:#94a3b8; display:flex; align-items:center; gap:4px; width:auto;">
+                        <input type="checkbox" id="rankRequireDual" checked style="width:auto; margin:0;"> 须拳+器械
+                    </label>
+                    <label style="font-size:0.85rem; color:#94a3b8;">最少场次
+                        <input type="number" id="rankMinEvents" value="2" min="1" max="20" style="width:52px; margin:0; padding:6px;">
+                    </label>
+                    <label style="font-size:0.85rem; color:#94a3b8; display:flex; align-items:center; gap:4px; width:auto;">
+                        <input type="checkbox" id="rankTop1Only" style="width:auto; margin:0;"> 仅显示各组第一名
+                    </label>
+                    <button onclick="loadRankReport()" class="btn-sm" style="background:#a855f7; color:#fff; width:auto;">刷新排名</button>
+                </div>
+                <p id="rankStats" style="margin:0 0 10px 0; font-size:0.85rem; color:#94a3b8;"></p>
+                <table>
+                    <thead><tr><th width="50">排名</th><th>年龄组</th><th>性别</th><th>选手</th><th>最高分</th><th>拳类最高</th><th>器械最高</th><th>明细</th></tr></thead>
+                    <tbody id="rankReportBody"></tbody>
+                </table>
+                <details style="margin-top:12px;">
+                    <summary style="cursor:pointer; color:#94a3b8; font-size:0.9rem;">未达资格选手</summary>
+                    <div id="rankDisqualifiedBody"></div>
+                </details>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let latestData = { courts: {}, leaderboard: [], athletes: [], activeJudges: {} };
+        let selectedAthleteIds = new Set(); 
+        let autoNextState = {}; 
+        let autoNextTriggered = {}; 
+        let isDragging = false;
+
+        let rankReportCache = null;
+        let lastCatalogEventsKey = '';
+        let lastLeaderboardKey = '';
+        let eventCatalogRows = [];
+        let activeRankingTab = 'leaderboard';
+
+        function switchRankingTab(tab) {
+            activeRankingTab = tab;
+            document.getElementById('rankTabLeaderboard').classList.toggle('active', tab === 'leaderboard');
+            document.getElementById('rankTabCombined').classList.toggle('active', tab === 'combined');
+            document.getElementById('rankPanelLeaderboard').classList.toggle('active', tab === 'leaderboard');
+            document.getElementById('rankPanelCombined').classList.toggle('active', tab === 'combined');
+            if (tab === 'combined') loadRankReport();
+        }
+
+        async function fetchData() {
+            const res = await fetch('/api/admin-data');
+            latestData = await res.json();
+            if (!isDragging) updateUI();
+        }
+        setInterval(fetchData, 1000);
+
+        function categoryColor(cat) {
+            if (cat === '拳类') return '#38bdf8';
+            if (cat === '器械') return '#22c55e';
+            return 'var(--danger)';
+        }
+
+        /** 3/5 位裁判分差距 > 0.5（与后端 hasWarning 一致，并兼容旧数据） */
+        function hasJudgeSpreadWarning(item) {
+            if (item.hasWarning) return true;
+            const scores = Object.values(item.rawScores || {}).map(Number).filter((n) => Number.isFinite(n));
+            if (scores.length < 2) return false;
+            return Math.max(...scores) - Math.min(...scores) > 0.5;
+        }
+
+        const CATALOG_CATEGORIES = ['auto', '拳类', '器械', '未分類'];
+
+        function isCatalogEditing() {
+            const el = document.activeElement;
+            return el && el.classList && el.classList.contains('catalog-category-select');
+        }
+
+        async function loadEventCatalog() {
+            const res = await fetch('/api/event-catalog');
+            const data = await res.json();
+            eventCatalogRows = data.catalog || [];
+            renderEventCatalog();
+        }
+
+        function renderEventCatalog() {
+            const q = (document.getElementById('catalogSearch')?.value || '').trim().toLowerCase();
+            const rows = eventCatalogRows.filter(row => {
+                if (!q) return true;
+                return (row.event || '').toLowerCase().includes(q)
+                    || (row.extracted || '').toLowerCase().includes(q);
+            });
+            const body = document.getElementById('eventCatalogBody');
+            if (!body) return;
+            body.innerHTML = rows.map(row => {
+                const current = row.overridden ? row.category : 'auto';
+                const effectiveCat = row.overridden ? row.category : row.autoCategory;
+                const isUnclassified = effectiveCat === '未分類' || effectiveCat === '未分类';
+                const opts = CATALOG_CATEGORIES.map(cat => {
+                    const label = cat === 'auto' ? `自动 (${row.autoCategory})` : cat;
+                    const sel = cat === current ? ' selected' : '';
+                    return `<option value="${cat}"${sel}>${label}</option>`;
+                }).join('');
+                let cls = 'catalog-category-select';
+                if (row.overridden) cls += ' overridden';
+                if (isUnclassified) cls += ' is-unclassified';
+                const rowCls = isUnclassified ? ' catalog-row-unclassified' : '';
+                const title = `${row.event}\n年龄: ${row.ageGroup || '—'} · ${row.gender || '—'}`;
+                return `<tr class="${rowCls.trim()}">
+                    <td class="catalog-event" title="${title.replace(/"/g, '&quot;')}">${row.event}</td>
+                    <td class="catalog-extracted" title="${row.extracted}">${row.extracted}</td>
+                    <td>
+                        <select class="${cls}" data-event="${encodeURIComponent(row.event)}" onchange="saveEventCategory(this)">${opts}</select>
+                    </td>
+                </tr>`;
+            }).join('') || '<tr><td colspan="3" style="color:#64748b; text-align:center; padding:12px;">暂无项目</td></tr>';
+        }
+
+        async function saveEventCategory(selectEl) {
+            const event = decodeURIComponent(selectEl.dataset.event || '');
+            const category = selectEl.value;
+            selectEl.disabled = true;
+            await fetch('/api/event-catalog-override', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ event, category }),
+            });
+            selectEl.disabled = false;
+            await loadEventCatalog();
+            if (rankReportCache) loadRankReport();
+        }
+
+        async function loadRankReport() {
+            const require_dual = document.getElementById('rankRequireDual').checked;
+            const min_events = document.getElementById('rankMinEvents').value;
+            const show_only_top1 = document.getElementById('rankTop1Only').checked;
+            const qs = new URLSearchParams({ require_dual, min_events, show_only_top1 });
+            const res = await fetch('/api/rank-report?' + qs);
+            rankReportCache = await res.json();
+            const s = rankReportCache.stats;
+            document.getElementById('rankStats').textContent =
+                `成绩 ${s.rawCount} 笔 → U 组有效 ${s.uGroupCount} 笔 → ${s.athleteCount} 位选手 → 符合资格 ${s.qualifiedCount} 位 · 排名依据：各项目最高分（非加总）`;
+            document.getElementById('rankReportBody').innerHTML = rankReportCache.rankings.map(r => {
+                const best = r.bestScore ?? r.totalScore;
+                const detail = r.events.map(e => `${e.extracted}(${e.category}):${e.score.toFixed(3)}`).join(' | ');
+                return `<tr><td>${r.rank}</td><td>${r.ageGroup}</td><td>${r.gender}</td><td>${r.athlete}</td><td style="color:var(--accent); font-weight:bold;">${Number(best).toFixed(3)}</td><td>${r.fistMax ? r.fistMax.toFixed(3) : '—'}</td><td>${r.weaponMax ? r.weaponMax.toFixed(3) : '—'}</td><td style="font-size:0.8rem; color:#94a3b8;">${detail}</td></tr>`;
+            }).join('') || '<tr><td colspan="8" style="color:#64748b;">尚无符合条件的排名（需有足够成绩且满足双项/场次）</td></tr>';
+            const dq = rankReportCache.disqualified || [];
+            const dqHtml = dq.length ? `<table style="width:100%; margin-top:8px;"><thead><tr><th>选手</th><th>原因</th><th>已有项目</th></tr></thead><tbody>${dq.map(d => `<tr><td>${d.athlete}</td><td style="color:var(--danger);">${d.reason}</td><td style="font-size:0.8rem;">${d.events.map(e => e.extracted + '(' + e.category + ')').join(', ')}</td></tr>`).join('')}</tbody></table>` : '<p style="color:#64748b; margin:8px 0;">无</p>';
+            document.getElementById('rankDisqualifiedBody').innerHTML = dqHtml;
+        } 
+
+        async function assignJudge(pin) {
+            const courtEl = document.getElementById(`assign-court-${pin}`);
+            const roleEl = document.getElementById(`assign-role-${pin}`);
+            if (!courtEl || !roleEl) return;
+            const court = courtEl.value;
+            const role = roleEl.value;
+            if (court && !role) return alert("选择场地后，必须指定裁判顺位！");
+            await fetch('/api/assign-judge', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ pin, court, role }) });
+            fetchData();
+        }
+
+        async function deleteJudge(pin) {
+            if (!confirm(`确定移除设备 PIN : ${pin} 吗？`)) return;
+            await fetch('/api/delete-judge', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ pin }) });
+            fetchData();
+        }
+
+        function updateJudgeOnlineStatus() {
+            const now = Date.now();
+            document.querySelectorAll('.judge-row[data-pin]').forEach(row => {
+                const pin = row.dataset.pin;
+                const j = latestData.activeJudges[pin];
+                if (!j) return;
+                const online = (now - j.lastSeen) < 15000;
+                const dot = row.querySelector('.judge-status-dot');
+                const pinEl = row.querySelector('.judge-pin');
+                if (dot) dot.className = 'judge-status-dot ' + (online ? 'online' : 'offline');
+                if (pinEl) pinEl.className = 'judge-pin ' + (online ? 'online' : 'offline');
+            });
+        }
+
+        function updateUI() {
+            let courtOptionsBase = Object.keys(latestData.courts).map(c => `<option value="${c}">${c}</option>`).join('');
+            let judgesStateKey = Object.keys(latestData.activeJudges).sort().join(',') + '|' + Object.keys(latestData.courts).sort().join(',');
+            let judgesContainer = document.getElementById('judgesList');
+
+            const assignmentKey = Object.keys(latestData.activeJudges).sort().map(p => {
+                const j = latestData.activeJudges[p];
+                return `${p}:${j.court || ''}:${j.role || ''}`;
+            }).join('|');
+            const fullJudgesKey = judgesStateKey + '|' + assignmentKey;
+
+            if (judgesContainer.dataset.stateKey !== fullJudgesKey) {
+                const courtNames = Object.keys(latestData.courts);
+                const courtOpts = courtNames.map(c => `<option value="${c}">${c}</option>`).join('');
+                const roleOpts = ['裁判1','裁判2','裁判3','裁判4','裁判5','裁判长'].map(r => `<option value="${r}">${r}</option>`).join('');
+                let judgesHTML = "";
+
+                for (const pin of Object.keys(latestData.activeJudges).sort()) {
+                    const j = latestData.activeJudges[pin];
+                    const online = (Date.now() - j.lastSeen) < 15000;
+                    const statusClass = online ? 'online' : 'offline';
+                    const courtVal = j.court || '';
+                    const roleVal = j.role || '';
+                    judgesHTML += `
+                    <div class="judge-row" data-pin="${pin}">
+                        <div class="judge-status-wrap">
+                            <span class="judge-status-dot ${statusClass}"></span>
+                            <span class="judge-pin ${statusClass}">PIN : ${pin}</span>
+                        </div>
+                        <select id="assign-court-${pin}" class="judge-pill-select" title="场地派发">
+                            <option value="" ${!courtVal ? 'selected' : ''}>场地派发</option>
+                            ${courtOpts}
+                        </select>
+                        <select id="assign-role-${pin}" class="judge-pill-select" title="裁判顺位">
+                            <option value="" ${!roleVal ? 'selected' : ''}>裁判顺位</option>
+                            ${roleOpts}
+                        </select>
+                        <button type="button" class="judge-icon-btn judge-btn-dispatch" title="派发" onclick="assignJudge('${pin}')">→</button>
+                        <button type="button" class="judge-icon-btn judge-btn-delete" title="移除设备" onclick="deleteJudge('${pin}')">×</button>
+                    </div>`;
+                }
+                judgesContainer.innerHTML = judgesHTML || '<div class="judge-empty">目前无裁判连线…</div>';
+                judgesContainer.dataset.stateKey = fullJudgesKey;
+
+                for (const pin of Object.keys(latestData.activeJudges)) {
+                    const j = latestData.activeJudges[pin];
+                    const cEl = document.getElementById(`assign-court-${pin}`);
+                    const rEl = document.getElementById(`assign-role-${pin}`);
+                    if (cEl && j.court) cEl.value = j.court;
+                    if (rEl && j.role) rEl.value = j.role;
+                }
+            } else {
+                updateJudgeOnlineStatus();
+            }
+
+            const uniqueAthleteEvents = [...new Set(latestData.athletes.map(a => a.event).filter(e => e))].sort((a, b) => a.localeCompare(b));
+            const currentEventsKey = uniqueAthleteEvents.join('|'); 
+            const athleteFilterSelect = document.getElementById('filterAthleteEvent');
+            const datalistEl = document.getElementById('eventOptionsList');
+
+            if (athleteFilterSelect.dataset.eventsKey !== currentEventsKey) {
+                const currentAthleteFilter = athleteFilterSelect.value;
+                let athleteOptionsHTML = `<option value="ALL">🏆 过滤：显示所有比赛项目</option>`;
+                let datalistHTML = ""; 
+                uniqueAthleteEvents.forEach(evt => { athleteOptionsHTML += `<option value="${evt}">${evt}</option>`; datalistHTML += `<option value="${evt}"></option>`; });
+                athleteFilterSelect.innerHTML = athleteOptionsHTML;
+                if(uniqueAthleteEvents.includes(currentAthleteFilter)) athleteFilterSelect.value = currentAthleteFilter;
+                datalistEl.innerHTML = datalistHTML;
+                athleteFilterSelect.dataset.eventsKey = currentEventsKey;
+            }
+
+            const searchTerm = document.getElementById('searchBar').value.toLowerCase();
+            const selectedEvent = athleteFilterSelect.value;
+
+            let filteredAthletes = latestData.athletes.filter(a => {
+                if (!a.athlete) return false;
+                let matchSearch = a.athlete.toLowerCase().includes(searchTerm) || (a.event || '').toLowerCase().includes(searchTerm);
+                let matchEvent = selectedEvent === "ALL" || a.event === selectedEvent;
+                return matchSearch && matchEvent;
+            });
+            filteredAthletes.sort((a, b) => { if (a.event !== b.event) return (a.event || "").localeCompare(b.event || ""); return (a.athlete || "").localeCompare(b.athlete || ""); });
+
+            document.getElementById('totalAthletes').innerText = filteredAthletes.length;
+            let listHTML = "";
+            filteredAthletes.forEach(a => {
+                let isChecked = selectedAthleteIds.has(String(a.id)) ? 'checked' : '';
+                listHTML += `<div class="athlete-row">
+                    <label style="display:flex; align-items:center; cursor:pointer; flex:1;">
+                        <input type="checkbox" class="athlete-cb" data-id="${a.id}" data-event="${a.event}" data-athlete="${a.athlete}" style="width:20px; height:20px; margin:0 10px 0 5px;" ${isChecked} onchange="toggleSelection('${a.id}')">
+                        <div><div style="font-size:0.75rem; color:#94a3b8;">${a.event}</div><div style="font-weight:bold; font-size:1rem;">${a.athlete}</div></div>
+                    </label>
+                    <div>
+                        <button class="btn-sm btn-edit" onclick="openModal('${a.id}', '${a.event}', '${a.athlete}')">✎</button>
+                        <button class="btn-sm btn-delete" onclick="deleteAthlete('${a.id}')">❌</button>
+                    </div>
+                </div>`;
+            });
+            document.getElementById('athleteListHTML').innerHTML = listHTML;
+
+            const courtKeys = Object.keys(latestData.courts);
+            const batchSelect = document.getElementById('batchCourt');
+            if (batchSelect.dataset.courts !== courtKeys.join(',')) {
+                batchSelect.innerHTML = courtKeys.map(c => `<option value="${c}">🎯 目标：${c}</option>`).join('');
+                batchSelect.dataset.courts = courtKeys.join(',');
+            }
+
+            let monitorHTML = "";
+            for(let courtName in latestData.courts) {
+                let courtData = latestData.courts[courtName];
+                let m = courtData.currentMatch;
+                
+                if (autoNextState[courtName] && m.matchId && m.athlete !== "等待检录..." && !autoNextTriggered[m.matchId]) {
+                    if (Object.keys(m.scores).length === m.judgeCount) {
+                        autoNextTriggered[m.matchId] = true;
+                        setTimeout(() => { if (autoNextState[courtName] && latestData.courts[courtName].currentMatch.matchId === m.matchId) nextInQueue(courtName); }, 3000); 
+                    }
+                }
+
+                let judgesHtml = "";
+                for(let i=1; i<=m.judgeCount; i++) {
+                    let s = m.scores[`裁判${i}`];
+                    judgesHtml += `<div style="background:#0f172a; padding:15px; border-radius:8px; border:1px solid #334155; min-width:80px; text-align:center;">
+                        裁判${i}<br><strong style="color:${s ? 'var(--success)' : '#475569'}; font-size:1.5rem;">${s || '--'}</strong></div>`;
+                }
+                judgesHtml += `<div style="background:#1e1b4b; padding:15px; border-radius:8px; border:1px solid #4c1d95; min-width:80px; text-align:center;">
+                        👑 裁判长<br><strong style="color:var(--accent); font-size:1.5rem;">${m.headJudgePoint !== 0 ? (m.headJudgePoint > 0 ? '+' : '') + m.headJudgePoint : '--'}</strong></div>`;
+
+                let listItems = courtData.queue.map((q, idx) => `
+                    <div class="drag-item">
+                        <span style="font-size:0.9rem;">${idx + 1}. <span style="color:#94a3b8;">[${q.event}]</span> <b>${q.athlete}</b></span>
+                        <button class="btn-sm btn-delete" style="padding:4px 8px;" onclick="removeFromQueue('${courtName}', ${idx})"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                `).join('');
+                
+                let qHtml = courtData.queue.length > 0 ? `<div style="margin-top:15px;"><div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;"><span style="color:#f59e0b; font-size:0.95rem; font-weight:bold;">⏳ 待上场 (${courtData.queue.length}人)</span><button class="btn-sm btn-delete" onclick="clearQueue('${courtName}')" style="font-size:0.75rem;">清空</button></div><div id="queue-list-${courtName}" style="max-height:150px; overflow-y:auto; padding-right:5px;">${listItems}</div></div>` : `<div style="margin-top:15px; color:#475569;">目前队列无人</div>`;
+
+                monitorHTML += `<div class="card" style="margin-bottom: 20px; border-left: 5px solid var(--accent);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                        <h2 style="margin:0;">🏆 ${courtName} - 场上: <span style="color:var(--accent);">${m.athlete !== '等待检录...' ? m.event + ' - ' + m.athlete : '等待呼叫...'}</span></h2>
+                        <div style="text-align:right;">
+                            <button class="btn-push" onclick="nextInQueue('${courtName}')" style="font-size:1.1rem; padding:8px 15px;">▶ 呼叫下一位</button>
+                            <button class="btn-delete" onclick="deleteCourt('${courtName}')" style="margin-left:5px;">❌</button>
+                            <div style="margin-top:8px;"><label style="font-size:0.85rem; color:#94a3b8; cursor:pointer;"><input type="checkbox" onchange="toggleAutoNext('${courtName}', this.checked)" ${autoNextState[courtName] ? 'checked' : ''} style="width:auto; margin:0;"> 🔁 裁判打完分自动换人</label></div>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap;">${judgesHtml}</div>
+                    ${qHtml}
+                </div>`;
+            }
+            document.getElementById('court-monitors').innerHTML = monitorHTML;
+
+            for(let courtName in latestData.courts) {
+                const el = document.getElementById(`queue-list-${courtName}`);
+                if (el) {
+                    if (el.sortableInstance) el.sortableInstance.destroy();
+                    el.sortableInstance = new Sortable(el, { animation: 150, ghostClass: 'ghost-drag', onStart: () => { isDragging = true; }, onEnd: async (evt) => { isDragging = false; if(evt.oldIndex !== evt.newIndex) { await fetch('/api/reorder-queue', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ court: courtName, oldIndex: evt.oldIndex, newIndex: evt.newIndex }) }); } fetchData(); } });
+                }
+            }
+
+            const filterSelect = document.getElementById('filterEvent');
+            const uniqueEvents = [...new Set(latestData.leaderboard.map(item => item.event))];
+            if (filterSelect.dataset.eventsKey !== uniqueEvents.join('|')) {
+                let optionsHTML = `<option value="ALL">显示全部项目</option>`;
+                uniqueEvents.forEach(evt => optionsHTML += `<option value="${evt}">🏆 ${evt}</option>`);
+                filterSelect.innerHTML = optionsHTML;
+                filterSelect.dataset.eventsKey = uniqueEvents.join('|');
+            }
+
+            const currentFilter = filterSelect.value;
+            let filteredBoard = currentFilter !== "ALL" ? latestData.leaderboard.filter(item => item.event === currentFilter) : latestData.leaderboard;
+            document.getElementById('leaderboardBody').innerHTML = [...filteredBoard].sort((a,b) => b.finalScore - a.finalScore).map((item, idx) => {
+                const warnCls = hasJudgeSpreadWarning(item) ? ' class="warning-row"' : '';
+                return `<tr${warnCls}><td>${idx + 1}</td><td>${item.event}</td><td>${item.athlete}</td><td><span style="color:#94a3b8; font-size:0.8rem;">${Object.entries(item.rawScores).map(([k,v])=>k+':'+v).join(' | ')} ${item.headJudgePoint!==0 ? '| 👑:'+item.headJudgePoint : ''}</span></td><td style="color:var(--accent); font-weight:bold; font-size: 1.1rem;">${item.finalScore.toFixed(3)}</td><td><button class="btn-sm btn-delete" onclick="deleteScore('${item.id}')">❌</button></td></tr>`;
+            }).join('');
+
+            const catalogKey = [...new Set([
+                ...latestData.athletes.map(a => a.event),
+                ...latestData.leaderboard.map(l => l.event),
+            ].filter(Boolean))].sort().join('|');
+            if (catalogKey !== lastCatalogEventsKey && !isCatalogEditing()) {
+                lastCatalogEventsKey = catalogKey;
+                loadEventCatalog();
+            }
+
+            const lbKey = latestData.leaderboard.map(l => `${l.id}:${l.finalScore}`).join('|');
+            if (lbKey !== lastLeaderboardKey) {
+                lastLeaderboardKey = lbKey;
+                rankReportCache = null;
+                if (activeRankingTab === 'combined') loadRankReport();
+            }
+        }
+
+        function openModal(id, event, athlete) { document.getElementById('modalEditId').value = id||""; document.getElementById('modalEditEvent').value = event||""; document.getElementById('modalEditAthlete').value = athlete||""; document.getElementById('modalOverlay').style.display = 'block'; document.getElementById('editModal').style.display = 'block'; }
+        function closeModal() { document.getElementById('modalOverlay').style.display = 'none'; document.getElementById('editModal').style.display = 'none'; }
+        async function submitEdit() { const id = document.getElementById('modalEditId').value, event = document.getElementById('modalEditEvent').value, athlete = document.getElementById('modalEditAthlete').value; if(!event || !athlete) return alert("请填写完整！"); await fetch('/api/save-athlete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id,event,athlete}) }); closeModal(); fetchData(); }
+        function toggleSelection(id) { id = String(id); if (selectedAthleteIds.has(id)) selectedAthleteIds.delete(id); else selectedAthleteIds.add(id); }
+        function selectAllAthletes() { document.querySelectorAll('.athlete-cb').forEach(cb => selectedAthleteIds.add(String(cb.dataset.id))); updateUI(); }
+        function deselectAllAthletes() { document.querySelectorAll('.athlete-cb').forEach(cb => selectedAthleteIds.delete(String(cb.dataset.id))); updateUI(); }
+        function toggleAutoNext(court, isChecked) { autoNextState[court] = isChecked; }
+        async function importAthletesFromText() { const text = document.getElementById('importData').value.trim(); if (!text) return alert("请先贴上资料！"); let toImport = text.split('\n').map(line => { let p = line.split('\t'); return p.length>=2 ? {event:p[0].trim(), athlete:p[1].trim()+(p[2]?" ("+p[2].trim()+")":"")} : null; }).filter(Boolean); if(toImport.length && confirm(`汇入 ${toImport.length} 笔？`)) { await fetch('/api/import-athletes', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({athletesList:toImport}) }); document.getElementById('importData').value=""; fetchData(); } }
+        async function addCourt() { const c = document.getElementById('newCourtInput').value.trim(); if(c) { await fetch('/api/add-court', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({courtName:c}) }); document.getElementById('newCourtInput').value=""; fetchData(); } }
+        async function deleteCourt(c) { if(confirm(`彻底移除【${c}】吗？`)){ await fetch('/api/delete-court', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({courtName:c}) }); fetchData(); } }
+        async function batchSend() { let selected = []; selectedAthleteIds.forEach(id => { let a = latestData.athletes.find(x => String(x.id) === id); if(a) selected.push(a); }); if(selected.length===0) return alert("请先勾选选手！"); await fetch('/api/batch-send', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({court: document.getElementById('batchCourt').value, athletesList: selected, judgeCount: document.getElementById('batchJudgeCount').value}) }); selectedAthleteIds.clear(); fetchData(); }
+        async function nextInQueue(c) { await fetch('/api/next-in-queue', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({court:c}) }); fetchData(); }
+        async function clearQueue(c) { if(confirm("确定清空队列吗？")) { await fetch('/api/clear-queue', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({court:c}) }); fetchData(); } }
+        async function removeFromQueue(c, i) { await fetch('/api/remove-from-queue', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({court:c, index:i}) }); fetchData(); }
+        async function saveAthlete() { const event=document.getElementById('editEvent').value, athlete=document.getElementById('editAthlete').value; if(event&&athlete) { await fetch('/api/save-athlete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id:"",event,athlete}) }); document.getElementById('editEvent').value=""; document.getElementById('editAthlete').value=""; fetchData(); } }
+        async function deleteAthlete(id) { if(confirm("确定删除吗？")) { await fetch('/api/delete-athlete', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id}) }); fetchData(); } }
+        async function deleteScore(id) { if(confirm("确定删除成绩吗？")) { await fetch('/api/delete-score', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id}) }); fetchData(); } }
+
+        loadEventCatalog();
+        loadRankReport();
+    </script>
+</body>
+</html>

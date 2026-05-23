@@ -1,0 +1,899 @@
+{
+  "athletes": [
+    {
+      "id": "17794678094440216",
+      "event": "U7 基础长拳 男子组",
+      "athlete": "孙誉 (SON YU)"
+    },
+    {
+      "id": "17794678094441432",
+      "event": "U8 基础长拳 男子组",
+      "athlete": "罗乙竣 (LOW YI JUN)"
+    },
+    {
+      "id": "17794678094442397",
+      "event": "U8 基础长拳 男子组",
+      "athlete": "黄楷云 (NG KELVIN)"
+    },
+    {
+      "id": "17794678094443114",
+      "event": "U8 基础长拳 男子组",
+      "athlete": "刘乐晨 (LOW LE SAN)"
+    },
+    {
+      "id": "17794678094444354",
+      "event": "U8 基础长拳 男子组",
+      "athlete": "黄梓轩 (ISAC NG ZI XUAN)"
+    },
+    {
+      "id": "17794678094445520",
+      "event": "U8 基础长拳 女子组",
+      "athlete": "谢恩忻 (KIAH EN XIN)"
+    },
+    {
+      "id": "17794678094446138",
+      "event": "U8 基础长拳 女子组",
+      "athlete": "陈慧恩 (RILEY TAN HUI EN)"
+    },
+    {
+      "id": "177946780944472",
+      "event": "U9 基础长拳 男子组",
+      "athlete": "邱启轩 (KIEW QI XUAN)"
+    },
+    {
+      "id": "1779467809444884",
+      "event": "U9 基础长拳 男子组",
+      "athlete": "余谚彬 (ER YAN BING)"
+    },
+    {
+      "id": "17794678094449333",
+      "event": "U9 基础长拳 女子组",
+      "athlete": "黄诗晨 (OOI SEE CHI)"
+    },
+    {
+      "id": "177946780944410233",
+      "event": "U9 基础长拳 女子组",
+      "athlete": "黄韦琳 (NG V LYNN)"
+    },
+    {
+      "id": "177946780944411910",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "彭振权 (PANG ZHEN QUAN)"
+    },
+    {
+      "id": "177946780944412663",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "林引渊 (LIM ENG YUAN)"
+    },
+    {
+      "id": "177946780944413539",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "谭康泰 (THAM KANG TAI)"
+    },
+    {
+      "id": "177946780944414813",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "符祥羽 (PU XIANG YU)"
+    },
+    {
+      "id": "177946780944415273",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "苏祈学 (SOH QI XUE)"
+    },
+    {
+      "id": "177946780944416558",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "阿奇乐 (DAENG M. AQIL ASYRAF)"
+    },
+    {
+      "id": "177946780944417360",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "廖政宇 (LOW ZHENG YU)"
+    },
+    {
+      "id": "177946780944418466",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "陈冠维 (ALOYSIUS CHIN GUAN WEI)"
+    },
+    {
+      "id": "17794678094441979",
+      "event": "U10 基础长拳 女子组",
+      "athlete": "何妡巧 (HO XIN QIAO)"
+    },
+    {
+      "id": "177946780944420924",
+      "event": "U10 基础长拳 女子组",
+      "athlete": "郑晶玹 (AMANDA TEE JING XUAN)"
+    },
+    {
+      "id": "177946780944421357",
+      "event": "U10 基础长拳 女子组",
+      "athlete": "杨姿颖 (SHEVON YEO TZY YING)"
+    },
+    {
+      "id": "17794678094442239",
+      "event": "U10 基础长拳 女子组",
+      "athlete": "王悦宣 (KAELY WANG YUE XUAN)"
+    },
+    {
+      "id": "177946780944423182",
+      "event": "U11 基础长拳 男子组",
+      "athlete": "范双鸿 (FAN SHUANG HONG)"
+    },
+    {
+      "id": "17794678094442498",
+      "event": "U11 基础长拳 男子组",
+      "athlete": "箫侨沅 (SIAU QIAO YUAN)"
+    },
+    {
+      "id": "17794678094442582",
+      "event": "U11 基础长拳 男子组",
+      "athlete": "陈嘉骏 (BRAYDEN TAN JIA JUN)"
+    },
+    {
+      "id": "177946780944426439",
+      "event": "U11 基础长拳 男子组",
+      "athlete": "刘乐轩 (LOW LE HIN)"
+    },
+    {
+      "id": "177946780944427410",
+      "event": "U11 基础长拳 男子组",
+      "athlete": "韩芷恒 (HAN ZI HENG)"
+    },
+    {
+      "id": "177946780944428593",
+      "event": "U11 基础长拳 女子组",
+      "athlete": "黄韦玮 (NG VIVIAN)"
+    },
+    {
+      "id": "177946780944429689",
+      "event": "U11 基础长拳 女子组",
+      "athlete": "罗凯丽 (LAW KAIL LI)"
+    },
+    {
+      "id": "177946780944430298",
+      "event": "U11 基础长拳 女子组",
+      "athlete": "郑媛心 (MANDY TEE YUAN SIN)"
+    },
+    {
+      "id": "177946780944431406",
+      "event": "U12 基础长拳 男子组",
+      "athlete": "傅敬捷 (FOO JING JIE)"
+    },
+    {
+      "id": "17794678094443220",
+      "event": "U12 基础长拳 男子组",
+      "athlete": "彭耀国 (LYNUS PANG YAO GUO)"
+    },
+    {
+      "id": "17794678094443387",
+      "event": "U12 基础长拳 男子组",
+      "athlete": "吴浩宾 (ARTHUR NG)"
+    },
+    {
+      "id": "177946780944434257",
+      "event": "U12 基础长拳 女子组",
+      "athlete": "刘泳瑄 (LAW YONG XUAN)"
+    },
+    {
+      "id": "177946780944435163",
+      "event": "U12 基础长拳 女子组",
+      "athlete": "凯丽莎 (DAENG NUR KHAALISHAH)"
+    },
+    {
+      "id": "17794678094443665",
+      "event": "U12 基础长拳 女子组",
+      "athlete": "吴诗涵 (SAMMI GOH SHI HAN)"
+    },
+    {
+      "id": "177946780944437626",
+      "event": "U7 基础南拳 男子组",
+      "athlete": "邱启恒 (KIEW QI HENG)"
+    },
+    {
+      "id": "177946780944438489",
+      "event": "U7 基础南拳 男子组",
+      "athlete": "江杰恒 (KUNG JIE HERN)"
+    },
+    {
+      "id": "177946780944439650",
+      "event": "U8 基础南拳 男子组",
+      "athlete": "RAIF (RAIF)"
+    },
+    {
+      "id": "177946780944440684",
+      "event": "U8 基础南拳 男子组",
+      "athlete": "黄梓轩 (ISSAC NG ZI XUAN)"
+    },
+    {
+      "id": "177946780944441109",
+      "event": "U8 基础南拳 女子组",
+      "athlete": "吴艳恩 (PENNY NG YAN EN)"
+    },
+    {
+      "id": "177946780944442740",
+      "event": "U8 基础南拳 女子组",
+      "athlete": "汤心如 (THUNG XIN RU)"
+    },
+    {
+      "id": "177946780944443979",
+      "event": "U8 基础南拳 女子组",
+      "athlete": "陈慧恩 (RILEY TAN HUI EN)"
+    },
+    {
+      "id": "177946780944444947",
+      "event": "U9 基础南拳 男子组",
+      "athlete": "林书禾 (LIN ZHI HOR)"
+    },
+    {
+      "id": "177946780944445400",
+      "event": "U9 基础南拳 女子组",
+      "athlete": "李侞恩 (SONIA LEE RU EN)"
+    },
+    {
+      "id": "177946780944446668",
+      "event": "U9 基础南拳 女子组",
+      "athlete": "锺雨玄 (Tiffany Chong Yi Xuan)"
+    },
+    {
+      "id": "177946780944447686",
+      "event": "U10 基础南拳 男子组",
+      "athlete": "阿奇乐 (DAENG M. AQIL ASYRAF)"
+    },
+    {
+      "id": "17794678094444848",
+      "event": "U10 基础南拳 男子组",
+      "athlete": "扬子贤 (YONG ZHE XIAN)"
+    },
+    {
+      "id": "177946780944449527",
+      "event": "U10 基础南拳 男子组",
+      "athlete": "谭康泰 (THAM KANG TAI)"
+    },
+    {
+      "id": "177946780944450495",
+      "event": "U10 基础南拳 男子组",
+      "athlete": "符祥羽 (PU XIANG YU)"
+    },
+    {
+      "id": "177946780944451571",
+      "event": "U10 基础南拳 女子组",
+      "athlete": "林怡君 (LIM YEE JIN)"
+    },
+    {
+      "id": "177946780944452680",
+      "event": "U11 基础南拳 男子组",
+      "athlete": "刘乐轩 (LOW LE HIN)"
+    },
+    {
+      "id": "177946780944453924",
+      "event": "U12 基础南拳 男子组",
+      "athlete": "彭耀国 (LYNUS PANG YAO GUO)"
+    },
+    {
+      "id": "177946780944454332",
+      "event": "U12 基础南拳 男子组",
+      "athlete": "郑靖勇 (THE JING YONG)"
+    },
+    {
+      "id": "177946780944455166",
+      "event": "U12 基础南拳 女子组",
+      "athlete": "刘泳瑄 (LAW YONG XUAN)"
+    },
+    {
+      "id": "17794678094445654",
+      "event": "U12 基础南拳 女子组",
+      "athlete": "彭祉淇 (PANG ZHI QI)"
+    },
+    {
+      "id": "177946780944457425",
+      "event": "U12 基础南拳 女子组",
+      "athlete": "凯丽莎 (DAENG NUR KHAALISHAH)"
+    },
+    {
+      "id": "177946780944458186",
+      "event": "U12 基础南拳 女子组",
+      "athlete": "张若琳 (CHONG RUO LIN)"
+    },
+    {
+      "id": "177946780944459969",
+      "event": "U12 基础南拳 女子组",
+      "athlete": "谢乙萱 (CHLOE CHUA YI XUAN)"
+    },
+    {
+      "id": "177946780944460174",
+      "event": "U7 手型手法 女子组",
+      "athlete": "莎菲娜 (DAENG NUR AISYA SYAFINA)"
+    },
+    {
+      "id": "177946780944461320",
+      "event": "U7 手型手法 女子组",
+      "athlete": "杨姿晨 (SHEENIES YEO TZY CHEN)"
+    },
+    {
+      "id": "177946780944462917",
+      "event": "U8 手型手法 男子组",
+      "athlete": "黄梓轩 (ISSAC NG ZI XUAN)"
+    },
+    {
+      "id": "177946780944463462",
+      "event": "U8 手型手法 男子组",
+      "athlete": "刘乐晨 (LOW LE SAN)"
+    },
+    {
+      "id": "1779467809444645",
+      "event": "U12 五步拳 男子组",
+      "athlete": "彭耀国 (LYNUS PANG YAO GUO)"
+    },
+    {
+      "id": "177946780944465874",
+      "event": "U10 初级南拳 男子组",
+      "athlete": "陈冠维 (ALOYSIUS CHIN GUAN WEI)"
+    },
+    {
+      "id": "17794678094446692",
+      "event": "U10 初级南拳 女子组",
+      "athlete": "王悦宣 (KAELY WANG YUE XUAN)"
+    },
+    {
+      "id": "177946780944467723",
+      "event": "U12 初级南拳 女子组",
+      "athlete": "张若琳 (CHONG RUO LIN)"
+    },
+    {
+      "id": "177946780944468434",
+      "event": "U12 初级南拳 女子组",
+      "athlete": "谢乙萱 (CHLOE CHUA YI XUAN)"
+    },
+    {
+      "id": "177946780944469303",
+      "event": "U8 基础刀术 女子组",
+      "athlete": "谢恩忻 (KIAH EN XIN)"
+    },
+    {
+      "id": "177946780944470944",
+      "event": "U9 基础刀术 男子组",
+      "athlete": "林书禾 (LIN ZHI HOR)"
+    },
+    {
+      "id": "177946780944471315",
+      "event": "U10 基础刀术 男子组",
+      "athlete": "谭康泰 (THAM KANG TAI)"
+    },
+    {
+      "id": "177946780944472820",
+      "event": "U12 基础刀术 男子组",
+      "athlete": "郑靖勇 (TEH JING YONG)"
+    },
+    {
+      "id": "177946780944473719",
+      "event": "U12 基础刀术 女子组",
+      "athlete": "张若琳 (CHONG RUO LIN)"
+    },
+    {
+      "id": "177946780944474915",
+      "event": "U12 基础刀术 女子组",
+      "athlete": "谢乙萱 (CHLOE CHUA YI XUAN)"
+    },
+    {
+      "id": "177946780944475808",
+      "event": "U7 基础剑术 男子组",
+      "athlete": "孙誉 (SON YU)"
+    },
+    {
+      "id": "177946780944476372",
+      "event": "U8 基础剑术 男子组",
+      "athlete": "何承希 (HO CHENG XI)"
+    },
+    {
+      "id": "177946780944477339",
+      "event": "U8 基础剑术 男子组",
+      "athlete": "黄楷云 (NG KELVEN)"
+    },
+    {
+      "id": "177946780944478364",
+      "event": "U9 基础剑术 女子组",
+      "athlete": "黄韦琳 (NG V LYNN)"
+    },
+    {
+      "id": "177946780944479880",
+      "event": "U9 基础剑术 女子组",
+      "athlete": "黄诗晨 (OOI SEE CHI)"
+    },
+    {
+      "id": "17794678094448030",
+      "event": "U10 基础剑术 男子组",
+      "athlete": "陈彦安 (TAN YEN AN)"
+    },
+    {
+      "id": "177946780944481312",
+      "event": "U10 基础剑术 女子组",
+      "athlete": "杨姿颖 (SHEVON YEO TZY YING)"
+    },
+    {
+      "id": "177946780944482124",
+      "event": "U10 基础剑术 女子组",
+      "athlete": "何妡巧 (HO XIN QIAO)"
+    },
+    {
+      "id": "177946780944483469",
+      "event": "U11 基础剑术 男子组",
+      "athlete": "刘乐轩 (LOW LE HIN)"
+    },
+    {
+      "id": "177946780944484427",
+      "event": "U11 基础剑术 男子组",
+      "athlete": "范双鸿 (FAN SHUANG HONG)"
+    },
+    {
+      "id": "177946780944485772",
+      "event": "U11 基础剑术 男子组",
+      "athlete": "箫侨沅 (SIAU QIAO YUAN)"
+    },
+    {
+      "id": "17794678094448687",
+      "event": "U11 基础剑术 女子组",
+      "athlete": "郑媛心 (MANDY TEE YUAN SIN)"
+    },
+    {
+      "id": "177946780944487331",
+      "event": "U11 基础剑术 女子组",
+      "athlete": "罗凯丽 (LAW KAI LI)"
+    },
+    {
+      "id": "177946780944488789",
+      "event": "U11 基础剑术 女子组",
+      "athlete": "林艾橦 (LIM AI TONG)"
+    },
+    {
+      "id": "17794678094448968",
+      "event": "U11 基础剑术 女子组",
+      "athlete": "黄韦玮 (NG VIVIAN)"
+    },
+    {
+      "id": "177946780944490650",
+      "event": "U12 基础剑术 男子组",
+      "athlete": "彭耀国 (LYNUS PANG YAO GUO)"
+    },
+    {
+      "id": "177946780944491161",
+      "event": "U12 基础剑术 男子组",
+      "athlete": "欧宗翰 (AU CHONG HAN)"
+    },
+    {
+      "id": "177946780944492536",
+      "event": "U7 基础枪术 男子组",
+      "athlete": "孙誉 (SON YU)"
+    },
+    {
+      "id": "177946780944493470",
+      "event": "U8 基础枪术 男子组",
+      "athlete": "黄楷云 (NG KELVEN)"
+    },
+    {
+      "id": "177946780944494687",
+      "event": "U8 基础枪术 男子组",
+      "athlete": "何承希 (HO CHENG XI)"
+    },
+    {
+      "id": "177946780944495794",
+      "event": "U8 基础枪术 男子组",
+      "athlete": "罗乙竣 (LOW YI JUN)"
+    },
+    {
+      "id": "17794678094449685",
+      "event": "U9 基础枪术 男子组",
+      "athlete": "余谚彬 (ER YAN BING)"
+    },
+    {
+      "id": "177946780944497331",
+      "event": "U9 基础枪术 男子组",
+      "athlete": "邱启轩 (KIEW QI XUAN)"
+    },
+    {
+      "id": "177946780944498325",
+      "event": "U9 基础枪术 女子组",
+      "athlete": "黄韦琳 (NG V LYNN)"
+    },
+    {
+      "id": "177946780944499555",
+      "event": "U9 基础枪术 女子组",
+      "athlete": "黄诗晨 (OOI SEE CHI)"
+    },
+    {
+      "id": "1779467809444100601",
+      "event": "U10 基础枪术 男子组",
+      "athlete": "廖政宇 (LOW ZHENG YU)"
+    },
+    {
+      "id": "1779467809444101507",
+      "event": "U10 基础枪术 男子组",
+      "athlete": "符祥羽 (PU XIANG YU)"
+    },
+    {
+      "id": "1779467809444102623",
+      "event": "U10 基础枪术 男子组",
+      "athlete": "林引渊 (LIM ENG YUAN)"
+    },
+    {
+      "id": "1779467809444103958",
+      "event": "U10 基础枪术 男子组",
+      "athlete": "陈冠维 (ALOYSIUS CHIN GUAN WEI)"
+    },
+    {
+      "id": "1779467809444104692",
+      "event": "U10 基础枪术 男子组",
+      "athlete": "彭振权 (PANG ZHEN QUAN)"
+    },
+    {
+      "id": "1779467809444105374",
+      "event": "U10 基础枪术 男子组",
+      "athlete": "阿奇乐 (DAENG M. AQIL ASYRAF)"
+    },
+    {
+      "id": "1779467809444106308",
+      "event": "U10 基础枪术 男子组",
+      "athlete": "陈彦安 (TAN YEN AN)"
+    },
+    {
+      "id": "1779467809444107650",
+      "event": "U10 基础枪术 女子组",
+      "athlete": "王悦宣 (KAELY WANG YUE XUAN)"
+    },
+    {
+      "id": "1779467809444108840",
+      "event": "U10 基础枪术 女子组",
+      "athlete": "林怡君 (LIM YEE JIN)"
+    },
+    {
+      "id": "1779467809444109698",
+      "event": "U10 基础枪术 女子组",
+      "athlete": "何妡巧 (HO XIN QIAO)"
+    },
+    {
+      "id": "1779467809444110792",
+      "event": "U10 基础枪术 女子组",
+      "athlete": "郑晶玹 (AMANDA  TEE JING XUAN)"
+    },
+    {
+      "id": "1779467809444111377",
+      "event": "U11 基础枪术 男子组",
+      "athlete": "李宥羲 (LEE YOU XI)"
+    },
+    {
+      "id": "1779467809444112942",
+      "event": "U11 基础枪术 男子组",
+      "athlete": "颜骏企 (GAN JUN QI)"
+    },
+    {
+      "id": "177946780944411367",
+      "event": "U11 基础枪术 男子组",
+      "athlete": "刘乐轩 (LOW LE HIN)"
+    },
+    {
+      "id": "17794678094441144",
+      "event": "U11 基础枪术 男子组",
+      "athlete": "彭玉龙 (PHANG EE LONG)"
+    },
+    {
+      "id": "1779467809444115834",
+      "event": "U11 基础枪术 男子组",
+      "athlete": "何枷贤 (CADEN HO)"
+    },
+    {
+      "id": "1779467809444116575",
+      "event": "U11 基础枪术 男子组",
+      "athlete": "范双鸿 (FAN SHUANG HONG)"
+    },
+    {
+      "id": "1779467809444117909",
+      "event": "U11 基础枪术 男子组",
+      "athlete": "陈嘉骏 (BRAYDEN TAN JIA JUN)"
+    },
+    {
+      "id": "17794678094441189",
+      "event": "U11 基础枪术 男子组",
+      "athlete": "箫煜洋 (SIOW YEE YANG)"
+    },
+    {
+      "id": "1779467809444119725",
+      "event": "U11 基础枪术 女子组",
+      "athlete": "郑媛心 (MANDY TEE YUAN SIN)"
+    },
+    {
+      "id": "177946780944412082",
+      "event": "U12 基础枪术 男子组",
+      "athlete": "欧宗翰 (AU CHONG HAN)"
+    },
+    {
+      "id": "1779467809444121270",
+      "event": "U12 基础枪术 男子组",
+      "athlete": "吴浩宾 (ARTHUR NG)"
+    },
+    {
+      "id": "1779467809444122924",
+      "event": "U12 基础枪术 男子组",
+      "athlete": "彭耀国 (LYNUS PANG YAO GUO)"
+    },
+    {
+      "id": "1779467809444123751",
+      "event": "U12 基础枪术 女子组",
+      "athlete": "凯丽莎 (DAENG NUR KHAALISHAH)"
+    },
+    {
+      "id": "1779467809445124373",
+      "event": "U12 基础枪术 女子组",
+      "athlete": "吴诗涵 (SAMMI GOH SHI HAN)"
+    },
+    {
+      "id": "1779467809445125823",
+      "event": "U12 基础枪术 女子组",
+      "athlete": "谢乙萱 (CHLOE CHUA YI XUAN)"
+    },
+    {
+      "id": "1779467809445126850",
+      "event": "U12 基础枪术 女子组",
+      "athlete": "刘泳瑄 (LAW YONG XUAN)"
+    },
+    {
+      "id": "1779467809445127489",
+      "event": "U12 传统太极短器械 女子组",
+      "athlete": "彭祉淇 (PANG ZHI QI)"
+    },
+    {
+      "id": "1779467809445128672",
+      "event": "U9 传统太极长器械 男子组",
+      "athlete": "汤泽宇 (THUNG ZE YU)"
+    },
+    {
+      "id": "1779467809445129948",
+      "event": "U9 传统太极长器械 男子组",
+      "athlete": "谢征峰 (CHIA ZHENG FENG)"
+    },
+    {
+      "id": "1779467809445130886",
+      "event": "U9 传统太极长器械 男子组",
+      "athlete": "黄文希 (WONG MAN XI)"
+    },
+    {
+      "id": "1779467809445131570",
+      "event": "U9 传统太极长器械 男子组",
+      "athlete": "余谚彬 (ER YAN BING)"
+    },
+    {
+      "id": "177946780944513254",
+      "event": "U10 传统太极长器械 男子组",
+      "athlete": "汤泽豪 (THUNG ZE HAO)"
+    },
+    {
+      "id": "1779467809445133780",
+      "event": "U10 传统太极长器械 男子组",
+      "athlete": "林引渊 (LIM ENG YUAN)"
+    },
+    {
+      "id": "1779467809445134725",
+      "event": "U12 传统太极长器械 男子组",
+      "athlete": "欧宗翰 (AU CHONG HAN)"
+    },
+    {
+      "id": "1779467809445135415",
+      "event": "集体项目",
+      "athlete": "龙山庙武术队"
+    },
+    {
+      "id": "1779467809445136462",
+      "event": "集体项目",
+      "athlete": "南兴华小武术队"
+    },
+    {
+      "id": "1779467809445137481",
+      "event": "集体项目",
+      "athlete": "培华华小武术队"
+    },
+    {
+      "id": "1779467809445138228",
+      "event": "集体项目",
+      "athlete": "智南华小武术队-A队"
+    },
+    {
+      "id": "1779467809445139683",
+      "event": "集体项目",
+      "athlete": "智南华小武术队-B队"
+    }
+  ],
+  "leaderboard": [
+    {
+      "id": "1779506763289",
+      "event": "U11 基础长拳 女子组",
+      "athlete": "罗凯丽 (LAW KAIL LI)",
+      "finalScore": 2,
+      "rawScores": {
+        "裁判1": 2,
+        "裁判2": 2,
+        "裁判3": 2
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    },
+    {
+      "id": "1779506777523",
+      "event": "U11 基础长拳 女子组",
+      "athlete": "黄韦玮 (NG VIVIAN)",
+      "finalScore": 3,
+      "rawScores": {
+        "裁判3": 3,
+        "裁判2": 3,
+        "裁判1": 3
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    },
+    {
+      "id": "1779506823542",
+      "event": "U11 基础长拳 女子组",
+      "athlete": "郑媛心 (MANDY TEE YUAN SIN)",
+      "finalScore": 1,
+      "rawScores": {
+        "裁判1": 1,
+        "裁判2": 1,
+        "裁判3": 1
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    },
+    {
+      "id": "1779521018978",
+      "event": "U10 基础枪术 男子组",
+      "athlete": "林引渊 (LIM ENG YUAN)",
+      "finalScore": 2,
+      "rawScores": {
+        "裁判3": 2,
+        "裁判2": 2,
+        "裁判1": 2
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    },
+    {
+      "id": "1779521042532",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "林引渊 (LIM ENG YUAN)",
+      "finalScore": 5,
+      "rawScores": {
+        "裁判1": 5,
+        "裁判2": 5,
+        "裁判3": 5
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    },
+    {
+      "id": "1779521090200",
+      "event": "U10 基础枪术 女子组",
+      "athlete": "林怡君 (LIM YEE JIN)",
+      "finalScore": 4,
+      "rawScores": {
+        "裁判3": 5,
+        "裁判2": 2,
+        "裁判1": 5
+      },
+      "headJudgePoint": 0,
+      "hasWarning": true
+    },
+    {
+      "id": "1779522069070",
+      "event": "U10 基础南拳 男子组",
+      "athlete": "谭康泰 (THAM KANG TAI)",
+      "finalScore": 3,
+      "rawScores": {
+        "裁判1": 3,
+        "裁判2": 3,
+        "裁判3": 3
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    },
+    {
+      "id": "1779522092526",
+      "event": "U10 基础长拳 男子组",
+      "athlete": "谭康泰 (THAM KANG TAI)",
+      "finalScore": 4,
+      "rawScores": {
+        "裁判3": 4,
+        "裁判2": 4,
+        "裁判1": 4
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    },
+    {
+      "id": "1779522147517",
+      "event": "U10 基础刀术 男子组",
+      "athlete": "谭康泰 (THAM KANG TAI)",
+      "finalScore": 7,
+      "rawScores": {
+        "裁判1": 7,
+        "裁判2": 7,
+        "裁判3": 7
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    },
+    {
+      "id": "1779522269339",
+      "event": "U10 初级南拳 女子组",
+      "athlete": "王悦宣 (KAELY WANG YUE XUAN)",
+      "finalScore": 3,
+      "rawScores": {
+        "裁判1": 3,
+        "裁判2": 3,
+        "裁判3": 3
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    },
+    {
+      "id": "1779522429858",
+      "event": "U10 基础枪术 女子组",
+      "athlete": "王悦宣 (KAELY WANG YUE XUAN)",
+      "finalScore": 9,
+      "rawScores": {
+        "裁判3": 9,
+        "裁判2": 9,
+        "裁判1": 9
+      },
+      "headJudgePoint": 0,
+      "hasWarning": false
+    }
+  ],
+  "courts": {
+    "1": {
+      "currentMatch": {
+        "matchId": "",
+        "event": "尚未开始",
+        "athlete": "等待检录...",
+        "judgeCount": 3,
+        "scores": {},
+        "headJudgePoint": 0
+      },
+      "queue": []
+    },
+    "2": {
+      "currentMatch": {
+        "matchId": "",
+        "event": "尚未开始",
+        "athlete": "等待检录...",
+        "judgeCount": 3,
+        "scores": {},
+        "headJudgePoint": 0
+      },
+      "queue": [
+        {
+          "id": "1779467809444109698",
+          "event": "U10 基础枪术 女子组",
+          "athlete": "何妡巧 (HO XIN QIAO)",
+          "judgeCount": 3
+        },
+        {
+          "id": "1779467809444108840",
+          "event": "U10 基础枪术 女子组",
+          "athlete": "林怡君 (LIM YEE JIN)",
+          "judgeCount": 3
+        },
+        {
+          "id": "1779467809444107650",
+          "event": "U10 基础枪术 女子组",
+          "athlete": "王悦宣 (KAELY WANG YUE XUAN)",
+          "judgeCount": 3
+        },
+        {
+          "id": "1779467809444110792",
+          "event": "U10 基础枪术 女子组",
+          "athlete": "郑晶玹 (AMANDA  TEE JING XUAN)",
+          "judgeCount": 3
+        }
+      ]
+    }
+  },
+  "eventCatalogOverrides": {}
+}
