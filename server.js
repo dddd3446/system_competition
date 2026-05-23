@@ -2,7 +2,6 @@ const express = require('express');
 const fs = require('fs');
 const scoreLogic = require('./lib/scoreLogic');
 const app = express();
-const port = 3000;
 
 app.use(express.json());
 app.use(express.static('public'));
@@ -158,4 +157,8 @@ app.post('/api/submit-score', (req, res) => {
     res.json({ success: true, message: "✅ 给分成功！" });
 });
 
-app.listen(port, () => console.log(`✅ 伺服器启动于 http://localhost:${port}`));
+// 🚨 修改为适应云端部署的启动代码
+const port = process.env.PORT || 3000;
+app.listen(port, '0.0.0.0', () => {
+    console.log(`✅ 伺服器启动于端口: ${port}`);
+});
