@@ -158,4 +158,7 @@ app.post('/api/submit-score', (req, res) => {
     res.json({ success: true, message: "✅ 给分成功！" });
 });
 
-app.listen(port, () => console.log(`✅ 伺服器启动于 http://localhost:${port}`));
+const port = process.env.PORT || 3000;
+app.listen(port, '0.0.0.0', () => {
+    console.log(`Server is running on port ${port}`);
+});
