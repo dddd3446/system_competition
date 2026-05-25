@@ -857,42 +857,6 @@
         "headJudgePoint": 0
       },
       "queue": []
-    },
-    "2": {
-      "currentMatch": {
-        "matchId": "",
-        "event": "尚未开始",
-        "athlete": "等待检录...",
-        "judgeCount": 3,
-        "scores": {},
-        "headJudgePoint": 0
-      },
-      "queue": [
-        {
-          "id": "1779467809444109698",
-          "event": "U10 基础枪术 女子组",
-          "athlete": "何妡巧 (HO XIN QIAO)",
-          "judgeCount": 3
-        },
-        {
-          "id": "1779467809444108840",
-          "event": "U10 基础枪术 女子组",
-          "athlete": "林怡君 (LIM YEE JIN)",
-          "judgeCount": 3
-        },
-        {
-          "id": "1779467809444107650",
-          "event": "U10 基础枪术 女子组",
-          "athlete": "王悦宣 (KAELY WANG YUE XUAN)",
-          "judgeCount": 3
-        },
-        {
-          "id": "1779467809444110792",
-          "event": "U10 基础枪术 女子组",
-          "athlete": "郑晶玹 (AMANDA  TEE JING XUAN)",
-          "judgeCount": 3
-        }
-      ]
     }
   },
   "eventCatalogOverrides": {}

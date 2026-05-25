@@ -119,7 +119,7 @@ app.post('/api/next-in-queue', (req, res) => { const { court } = req.body; if (c
 app.post('/api/clear-queue', (req, res) => { const { court } = req.body; if(courts[court]) courts[court].queue = []; saveData(); res.json({ success: true }); });
 app.post('/api/remove-from-queue', (req, res) => { const { court, index } = req.body; if (courts[court] && courts[court].queue) { courts[court].queue.splice(index, 1); saveData(); } res.json({ success: true }); });
 
-// 🚨 接收分数逻辑改为认证 PIN 码
+// 🚨 接收分数逻辑：支持精确到小数点后三位
 app.post('/api/submit-score', (req, res) => {
     const { pin, score } = req.body;
     let judge = activeJudges[pin];
@@ -132,8 +132,11 @@ app.post('/api/submit-score', (req, res) => {
     let currentMatch = courts[court].currentMatch;
     if (currentMatch.athlete === "等待检录...") return res.json({ success: false, message: "该场地尚未发送选手" });
     
-    if (role === "裁判长") currentMatch.headJudgePoint = parseFloat(score);
-    else currentMatch.scores[role] = parseFloat(score);
+    // 💡 强制将接收到的分数保留3位小数
+    let parsedScore = Math.round(parseFloat(score) * 1000) / 1000;
+
+    if (role === "裁判长") currentMatch.headJudgePoint = parsedScore;
+    else currentMatch.scores[role] = parsedScore;
 
     const judgeKeys = Object.keys(currentMatch.scores);
     if (judgeKeys.length === currentMatch.judgeCount) {
@@ -148,7 +151,15 @@ app.post('/api/submit-score', (req, res) => {
             finalScore = ((scoresArray[1] + scoresArray[2] + scoresArray[3]) / 3) + currentMatch.headJudgePoint;
         }
 
-        const newRecord = { id: currentMatch.matchId, event: currentMatch.event, athlete: currentMatch.athlete, finalScore: parseFloat(finalScore.toFixed(3)), rawScores: { ...currentMatch.scores }, headJudgePoint: currentMatch.headJudgePoint, hasWarning };
+        const newRecord = { 
+            id: currentMatch.matchId, 
+            event: currentMatch.event, 
+            athlete: currentMatch.athlete, 
+            finalScore: parseFloat(finalScore.toFixed(3)), 
+            rawScores: { ...currentMatch.scores }, 
+            headJudgePoint: currentMatch.headJudgePoint, 
+            hasWarning 
+        };
         const idx = leaderboard.findIndex(item => item.id === currentMatch.matchId);
         if (idx !== -1) leaderboard[idx] = newRecord;
         else leaderboard.push(newRecord);
