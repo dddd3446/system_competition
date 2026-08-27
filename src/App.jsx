@@ -23,10 +23,40 @@ import {
   Info,
   LayoutGrid,
   Search,
+  GripVertical,
+  ArrowUp,
+  ArrowDown,
+  Play,
+  SkipForward,
+  Undo2,
+  Zap,
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, get, set, remove, onValue } from "firebase/database";
+import {
+  getDatabase,
+  ref,
+  get,
+  set,
+  update,
+  remove,
+  onValue,
+} from "firebase/database";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDroppable,
+  closestCorners,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 /* ------------------------------------------------------------------ */
 /* Firebase Cloud Configuration & Initialization                      */
@@ -147,6 +177,22 @@ const getJSON = async (key, fallback) => {
 };
 const setJSON = (key, obj) => sSet(key, obj);
 
+/* 多路徑原子更新。patch 的 key 可以含斜線（例如 "gkA/open"），Firebase 會
+   把整份 patch 當成一次寫入送出，所以「關掉舊項目 + 開啟新項目」會在裁判端
+   的 sWatch 同一個 callback 內出現，不會閃出兩個同時開或一個都沒開的狀態。
+   相對於 sSet 整份重寫（54 個項目），這裡只碰到有列出的葉節點，兩台管理
+   裝置同時操作也不會互相覆蓋。 */
+async function sUpdate(path, patch) {
+  try {
+    await authReady;
+    await update(ref(db, "wushu_data/" + path), patch);
+    return true;
+  } catch (e) {
+    console.error("[Firebase] 更新失敗", path, e.code || e.message);
+    return false;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Admin password (存在雲端，不再寫死在前端)                            */
 /* ------------------------------------------------------------------ */
@@ -233,11 +279,18 @@ function computeRanks(sortedDesc) {
 
 async function computeGroupResults(groupKey, meta, venue, athletesAll) {
   if (!meta || !venue) return null;
+  /* 平行取回所有裁判的分數與加分，序列取回會讓延遲乘上裁判人數。 */
+  const [scoreMaps, bonusRaw] = await Promise.all([
+    Promise.all(
+      venue.judges.map((j) => getJSON(`score:${groupKey}:${j.id}`, {}))
+    ),
+    getJSON(`bonus:${groupKey}`, {}),
+  ]);
   const judgeScores = {};
-  for (const j of venue.judges) {
-    judgeScores[j.id] = (await getJSON(`score:${groupKey}:${j.id}`, {})) || {};
-  }
-  const bonusMap = (await getJSON(`bonus:${groupKey}`, {})) || {};
+  venue.judges.forEach((j, i) => {
+    judgeScores[j.id] = scoreMaps[i] || {};
+  });
+  const bonusMap = bonusRaw || {};
   const groupAthletes = athletesAll
     .filter((a) => meta.athleteIds.includes(a.id))
     .sort((a, b) => a.order - b.order);
@@ -294,6 +347,32 @@ async function computeGroupResults(groupKey, meta, venue, athletesAll) {
     rankMap[r.athlete.id] = r.rank;
   });
   return results.map((r) => ({ ...r, rank: rankMap[r.athlete.id] ?? null }));
+}
+
+/* 一個項目是否「完全評完」＝每位選手都收齊全部裁判的分數，且裁判長加分也
+   都填了。computeGroupResults 回傳的 r.bonus 在沒填時是 null，所以
+   typeof r.bonus === "number" 就等於「有加分」，不必再讀一次 bonus key。 */
+function isGroupFullyComplete(results) {
+  if (!results || results.length === 0) return false;
+  return results.every((r) => r.complete && typeof r.bonus === "number");
+}
+
+/* 取得項目的完成狀態。submitted/expected 用來顯示「9/12 已評」這種即時進度，
+   分母同時算入裁判分數與裁判長加分，因為兩者都齊全才算完成。 */
+async function fetchGroupCompletion(gk, meta, venue, athletesAll) {
+  const results = await computeGroupResults(gk, meta, venue, athletesAll);
+  if (!results) return { results: null, complete: false, submitted: 0, expected: 0 };
+  const submitted = results.reduce(
+    (n, r) => n + r.submittedCount + (typeof r.bonus === "number" ? 1 : 0),
+    0
+  );
+  const expected = results.length * (venue.judgeCount + 1);
+  return {
+    results,
+    complete: isGroupFullyComplete(results),
+    submitted,
+    expected,
+  };
 }
 
 async function computeBestAthletes(groupsMeta, venuesConfig, athletesAll) {
@@ -381,6 +460,26 @@ function useFonts() {
   }, []);
 }
 
+/* 用 JS 判斷而不是 CSS @media：手機與桌面在排程看板是兩棵不同的元件樹
+   （桌面同時渲染全部欄位，手機一次一欄），而且拖放必須在觸控裝置停用，
+   那是 CSS 做不到的判斷。 */
+function useMediaQuery(query) {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia
+      ? window.matchMedia(query).matches
+      : false
+  );
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mql = window.matchMedia(query);
+    const on = (e) => setMatches(e.matches);
+    setMatches(mql.matches);
+    mql.addEventListener("change", on);
+    return () => mql.removeEventListener("change", on);
+  }, [query]);
+  return matches;
+}
+
 function Card({ children, style, ...rest }) {
   return (
     <div
@@ -405,6 +504,7 @@ function Btn({
   disabled,
   style,
   type = "button",
+  title,
 }) {
   const base = {
     fontFamily: FONT_BODY,
@@ -440,6 +540,7 @@ function Btn({
       type={type}
       disabled={disabled}
       onClick={onClick}
+      title={title}
       onMouseEnter={(e) =>
         !disabled && (e.currentTarget.style.filter = "brightness(1.12)")
       }
@@ -952,6 +1053,15 @@ function AdminConsole({ onBack }) {
     loadAll();
   }, [loadAll]);
 
+  /* 掛在總控台層級，切分頁不會中斷自動接續。 */
+  const engine = useQueueEngine({
+    groupsMeta,
+    setGroupsMeta,
+    venuesConfig,
+    athletes,
+    enabled: !loading,
+  });
+
   const groupKeys = Object.keys(groupsMeta);
 
   return (
@@ -990,7 +1100,13 @@ function AdminConsole({ onBack }) {
           </button>
         ))}
       </div>
-      <div style={{ padding: 20, maxWidth: 900, margin: "0 auto" }}>
+      <div
+        style={{
+          padding: 20,
+          maxWidth: tab === "events" ? 1400 : 900,
+          margin: "0 auto",
+        }}
+      >
         {loading ? (
           <Loading />
         ) : (
@@ -1012,9 +1128,8 @@ function AdminConsole({ onBack }) {
             {tab === "events" && (
               <EventsTab
                 groupsMeta={groupsMeta}
-                setGroupsMeta={setGroupsMeta}
                 venuesConfig={venuesConfig}
-                athletes={athletes}
+                engine={engine}
               />
             )}
             {tab === "monitor" && (
@@ -1126,6 +1241,8 @@ function RosterTab({ athletes, groupsMeta, reload }) {
   const clearAll = async () => {
     await sDel("athletes");
     await sDel("groups-meta");
+    /* 佇列的內容全是 groupKey，名單清掉後就成了孤兒，一起刪。 */
+    await sDel("queues");
     setConfirmOpen(false);
     reload();
   };
@@ -1441,45 +1558,895 @@ function VenuesTab({ venuesConfig, setVenuesConfig, reload }) {
   );
 }
 
-/* ---- Events Tab ---- */
-function EventsTab({ groupsMeta, setGroupsMeta, venuesConfig, athletes }) {
-  const [searchQuery, setSearchQuery] = useState("");
+/* ------------------------------------------------------------------ */
+/* Events Tab — 場地排程看板                                           */
+/* ------------------------------------------------------------------ */
+/*
+  資料放在 wushu_data/queues：
 
-  const save = async (newMeta) => {
-    setGroupsMeta(newMeta);
-    await setJSON("groups-meta", newMeta);
+    queues[venueId] = { order: [gk...], done: [gk...], auto: bool, updatedAt }
+
+  order[0] 是佇列首位，其餘是等候中。queues 是「位置」的真相來源，
+  groups-meta 的 venueId / open / status 是同一個函式順帶寫出的投影
+  ——裁判端只讀 groups-meta，所以那份契約不能變。
+
+  不變式（對每個場地 v）：
+    1. gk ∈ queues[v].order        ⟺ groups-meta[gk].venueId === v
+    2. groups-meta[gk].open === true ⟹ gk === queues[v].order[0]
+       （反向刻意不成立：排到首位不會自動開啟，要按「開始」）
+    3. gk ∈ queues[v].done  ⟹ venueId === v, open === false, status === "done"
+    4. 一個 gk 最多只出現在一個場地的 order + done 之中
+
+  寫入順序一律「先 meta 後 queue」：meta 是單次 multi-path 原子寫入，
+  裁判端會在同一個 sWatch callback 看到「關舊的 + 開新的」，不會閃爍。
+  若 queue 那步失敗，裁判仍在評正確的項目，下次載入 reconcile 會修好。
+*/
+
+const EMPTY_Q = { order: [], done: [], auto: false };
+
+/* RTDB 不存空陣列（整個 key 會消失），所以 null 一律轉回 []，順便去重。 */
+function normQueue(q) {
+  const uniq = (a) => Array.from(new Set(Array.isArray(a) ? a.filter(Boolean) : []));
+  return {
+    order: uniq(q && q.order),
+    done: uniq(q && q.done),
+    auto: !!(q && q.auto),
+    updatedAt: (q && q.updatedAt) || 0,
   };
-  const assignVenue = (gk, venueId) =>
-    save({ ...groupsMeta, [gk]: { ...groupsMeta[gk], venueId } });
-  const toggleOpen = (gk) =>
-    save({
-      ...groupsMeta,
-      [gk]: { ...groupsMeta[gk], open: !groupsMeta[gk].open },
+}
+
+const venueQueue = (queues, vid) => normQueue(queues && queues[vid]);
+
+/* 找出某個項目目前在哪個場地的哪一份清單、第幾位。不在任何佇列時回傳 null。 */
+function queueLocate(queues, gk) {
+  for (const vid of Object.keys(queues || {})) {
+    const q = venueQueue(queues, vid);
+    let i = q.order.indexOf(gk);
+    if (i >= 0) return { venueId: vid, list: "order", index: i };
+    i = q.done.indexOf(gk);
+    if (i >= 0) return { venueId: vid, list: "done", index: i };
+  }
+  return null;
+}
+
+const statusOf = (m) =>
+  m && m.open ? "running" : m && m.venueId ? "queued" : "idle";
+
+/*
+  所有移動的唯一收口：拖放、點選放置、▲▼、撤銷、開始、重新開啟、自動接續
+  全部走這裡。純函式，所以上面那些不變式只可能在這一個地方被破壞。
+
+  回傳 { nextQueues, metaPatch, touched }：
+    metaPatch 的 key 是 "<gk>/<field>"，可直接餵給 sUpdate("groups-meta", …)
+    touched 是被動到的 venueId 清單，決定要寫哪幾個場地的 queue
+*/
+function buildQueueMutation(queues, groupsMeta, action) {
+  const next = {};
+  for (const vid of Object.keys(queues || {})) next[vid] = venueQueue(queues, vid);
+  const metaPatch = {};
+  const touched = new Set();
+
+  const ensure = (vid) => {
+    if (!next[vid]) next[vid] = { ...EMPTY_Q, order: [], done: [] };
+    return next[vid];
+  };
+  /* 只寫真正變動的欄位：純調序（等候項目之間換位）因此產生空 patch，
+     完全不會碰到 groups-meta，也就不會驚動裁判端的 sWatch。 */
+  const setMeta = (gk, fields) => {
+    const cur = groupsMeta[gk] || {};
+    for (const k of Object.keys(fields)) {
+      const key = `${gk}/${k}`;
+      const prev = key in metaPatch ? metaPatch[key] : cur[k];
+      const want = fields[k];
+      if (prev === want) delete metaPatch[key];
+      else metaPatch[key] = want;
+    }
+  };
+  /* 把 gk 從所有佇列拔乾淨，回傳它原本在哪個場地。 */
+  const detach = (gk) => {
+    let from = null;
+    for (const vid of Object.keys(next)) {
+      const q = next[vid];
+      if (q.order.includes(gk) || q.done.includes(gk)) from = vid;
+      q.order = q.order.filter((k) => k !== gk);
+      q.done = q.done.filter((k) => k !== gk);
+      if (from === vid) touched.add(vid);
+    }
+    return from;
+  };
+  /* 關掉某場地內除了 keepGk 以外所有開著的項目，維持「一場地一項目」。 */
+  const closeOthers = (vid, keepGk) => {
+    for (const gk of ensure(vid).order) {
+      if (gk === keepGk) continue;
+      if (groupsMeta[gk] && groupsMeta[gk].open) {
+        setMeta(gk, { open: false, status: "queued" });
+      }
+    }
+  };
+
+  const doPlace = (gk, toVenue, toIndex) => {
+    detach(gk);
+    const q = ensure(toVenue);
+    let idx = Math.max(0, Math.min(toIndex, q.order.length));
+    /* 首位正在評分時不准插到 index 0：把正在評的項目從裁判腳下抽走是這個
+       功能最糟的失敗模式。要插隊必須先按「撤銷」，那是一個刻意的動作。 */
+    const head = q.order[0];
+    if (idx === 0 && head && groupsMeta[head] && groupsMeta[head].open) idx = 1;
+    q.order.splice(idx, 0, gk);
+    touched.add(toVenue);
+    const m = groupsMeta[gk] || {};
+    /* 進場地不自動開啟，一律先當等候中；要跑得按「開始」。 */
+    if (m.venueId !== toVenue) setMeta(gk, { venueId: toVenue });
+    if (m.open) setMeta(gk, { open: false });
+    setMeta(gk, { status: "queued" });
+  };
+
+  const doRemove = (gk) => {
+    detach(gk);
+    const m = groupsMeta[gk] || {};
+    if (m.venueId) setMeta(gk, { venueId: null });
+    if (m.open) setMeta(gk, { open: false });
+    setMeta(gk, { status: "idle" });
+  };
+
+  /* 「開始」與「重新開啟」共用：移到首位並開啟。 */
+  const doStart = (gk) => {
+    const loc = queueLocate(next, gk);
+    const vid = (loc && loc.venueId) || (groupsMeta[gk] || {}).venueId;
+    if (!vid) return;
+    detach(gk);
+    const q = ensure(vid);
+    q.order.unshift(gk);
+    touched.add(vid);
+    closeOthers(vid, gk);
+    setMeta(gk, { venueId: vid, open: true, status: "running" });
+  };
+
+  const doComplete = (gk) => {
+    const loc = queueLocate(next, gk);
+    const vid = (loc && loc.venueId) || (groupsMeta[gk] || {}).venueId;
+    if (!vid) return;
+    detach(gk);
+    const q = ensure(vid);
+    q.done = [gk, ...q.done.filter((k) => k !== gk)];
+    touched.add(vid);
+    setMeta(gk, { venueId: vid, open: false, status: "done" });
+  };
+
+  switch (action.type) {
+    case "place":
+      doPlace(action.gk, action.toVenue, action.toIndex);
+      break;
+    case "remove":
+      doRemove(action.gk);
+      break;
+    case "start":
+      doStart(action.gk);
+      break;
+    case "complete":
+      doComplete(action.gk);
+      break;
+    case "advance": {
+      /* 完成首位 + 開啟下一個，合成一次 mutation，meta 是單次原子寫入，
+         裁判端不會看到「兩個都關著」的中間狀態。 */
+      const q = ensure(action.venueId);
+      const head = q.order[0];
+      if (!head) break;
+      const nextGk = q.order[1];
+      doComplete(head);
+      if (nextGk) doStart(nextGk);
+      break;
+    }
+    case "toggleAuto": {
+      const q = ensure(action.venueId);
+      q.auto = !q.auto;
+      touched.add(action.venueId);
+      break;
+    }
+    default:
+      break;
+  }
+
+  return { nextQueues: next, metaPatch, touched: Array.from(touched) };
+}
+
+/*
+  從既有的 groups-meta 種出 / 修好 queues。看板掛載時跑一次，也掛在
+  「修復佇列」按鈕後面。必須冪等：跑第二次要回傳 changed === false。
+*/
+function reconcileQueues(groupsMeta, venuesConfig, existingQueues) {
+  const venueIds = (venuesConfig.venues || []).map((v) => v.id);
+  const metaPatch = {};
+  /* 同 buildQueueMutation：只記真正變動的欄位，沒事就不要製造寫入。 */
+  const setMeta = (gk, fields) => {
+    const cur = groupsMeta[gk] || {};
+    for (const k of Object.keys(fields)) {
+      const key = `${gk}/${k}`;
+      const prev = key in metaPatch ? metaPatch[key] : cur[k];
+      if (prev === fields[k]) delete metaPatch[key];
+      else metaPatch[key] = fields[k];
+    }
+  };
+
+  const queues = {};
+  for (const vid of venueIds) {
+    const q = venueQueue(existingQueues, vid);
+    /* 丟掉：groups-meta 已經沒有的（名單重匯）、venueId 對不上這個場地的 */
+    const keep = (gk) =>
+      groupsMeta[gk] && groupsMeta[gk].venueId === vid;
+    const done = q.done.filter(keep);
+    const order = q.order.filter((gk) => keep(gk) && !done.includes(gk));
+    queues[vid] = { order, done, auto: q.auto, updatedAt: q.updatedAt };
+  }
+
+  /* 被刪掉的場地留下的孤兒項目：送回資料庫 */
+  for (const [gk, m] of Object.entries(groupsMeta)) {
+    if (m.venueId && !venueIds.includes(m.venueId)) {
+      setMeta(gk, { venueId: null, open: false, status: "idle" });
+    }
+  }
+
+  /* 種子：兩個管理員同時載入必須種出一模一樣的看板，所以排序要決定性。
+     numeric 讓 U9 < U10 < U12，而不是字典序的 U10 < U9。 */
+  const seedSort = (a, b) =>
+    `${groupsMeta[a].ageGroup}|${groupsMeta[a].eventName}|${groupsMeta[a].gender}`.localeCompare(
+      `${groupsMeta[b].ageGroup}|${groupsMeta[b].eventName}|${groupsMeta[b].gender}`,
+      "zh-Hant",
+      { numeric: true }
+    );
+
+  for (const vid of venueIds) {
+    const q = queues[vid];
+    const known = new Set([...q.order, ...q.done]);
+    const missing = Object.keys(groupsMeta)
+      .filter((gk) => groupsMeta[gk].venueId === vid && !known.has(gk))
+      .sort(seedSort);
+    /* 已經開著的項目正在跑，必須是 index 0 */
+    const openOnes = missing.filter((gk) => groupsMeta[gk].open);
+    const rest = missing.filter((gk) => !groupsMeta[gk].open);
+    q.order = [...openOnes, ...q.order, ...rest];
+  }
+
+  for (const vid of venueIds) {
+    const q = queues[vid];
+    /* 一個場地最多一個 open：保留 index 最小的，其餘關掉 */
+    const opens = q.order.filter((gk) => groupsMeta[gk].open);
+    if (opens.length > 1) {
+      for (const gk of opens.slice(1)) setMeta(gk, { open: false, status: "queued" });
+    }
+    /* 首位是關的但後面有開著的 → 有裁判正在評它，錯的是佇列，把它移到首位 */
+    const runner = opens[0];
+    if (runner && q.order[0] !== runner) {
+      q.order = [runner, ...q.order.filter((gk) => gk !== runner)];
+    }
+    /* done 裡的項目不該是開著的 */
+    for (const gk of q.done) {
+      if (groupsMeta[gk].open) setMeta(gk, { open: false });
+    }
+  }
+
+  /* 補 status（純顯示用，缺值不影響正確性） */
+  const inQueue = new Set();
+  for (const vid of venueIds) {
+    queues[vid].order.forEach((gk) => inQueue.add(gk));
+    queues[vid].done.forEach((gk) => inQueue.add(gk));
+  }
+  for (const [gk, m] of Object.entries(groupsMeta)) {
+    const loc = queueLocate(queues, gk);
+    const want = loc
+      ? loc.list === "done"
+        ? "done"
+        : metaPatch[`${gk}/open`] === false
+        ? "queued"
+        : m.open
+        ? "running"
+        : "queued"
+      : "idle";
+    /* status 純顯示用，缺值時退回從 open/venueId 推導的值。既然推導出來
+       的就是對的，就別為了補欄位而製造一次寫入——否則 reconcile 永遠
+       不會安定下來（每次載入都寫一輪）。 */
+    const effVenue = `${gk}/venueId` in metaPatch ? metaPatch[`${gk}/venueId`] : m.venueId;
+    const effOpen = `${gk}/open` in metaPatch ? metaPatch[`${gk}/open`] : m.open;
+    const cur =
+      `${gk}/status` in metaPatch
+        ? metaPatch[`${gk}/status`]
+        : m.status ?? statusOf({ venueId: effVenue, open: effOpen });
+    if (cur !== want) setMeta(gk, { status: want });
+    else delete metaPatch[`${gk}/status`];
+  }
+
+  const sameArr = (a, b) =>
+    a.length === b.length && a.every((x, i) => x === b[i]);
+  let changed = Object.keys(metaPatch).length > 0;
+  if (!changed) {
+    /* 只比內容，不比 key 是否存在：空佇列的場地在 RTDB 裡根本沒有節點
+       （空陣列不會被儲存），拿 key 數量來比會永遠判定「有變」，
+       每次 reconcile 都寫一輪。 */
+    for (const vid of venueIds) {
+      const prev = venueQueue(existingQueues, vid);
+      if (
+        !sameArr(prev.order, queues[vid].order) ||
+        !sameArr(prev.done, queues[vid].done)
+      ) {
+        changed = true;
+        break;
+      }
+    }
+    /* 已刪除的場地還留在 queues 裡也要清掉 */
+    if (!changed) {
+      changed = Object.keys(existingQueues || {}).some(
+        (v) => !venueIds.includes(v)
+      );
+    }
+  }
+
+  return { queues, metaPatch, changed };
+}
+
+/* ------------------------------------------------------------------ */
+/* Events Tab                                                         */
+/* ------------------------------------------------------------------ */
+/*
+  佇列引擎。刻意掛在 AdminConsole 而不是 EventsTab：自動接續要在管理員
+  切到「即時監看」或「排名結果」時繼續跑，掛在分頁元件上一離開就被卸載。
+  只要總控台這一頁開著（任何分頁），這個 hook 就活著。
+
+  仍然是「總控台開著才會自動接續」——把整頁關掉就會停，那要 Cloud
+  Functions 才解得掉。
+*/
+function useQueueEngine({ groupsMeta, setGroupsMeta, venuesConfig, athletes, enabled }) {
+  const [queues, setQueues] = useState({});
+  const [ready, setReady] = useState(false);
+  const [headStatus, setHeadStatus] = useState({});
+
+  const venues = venuesConfig.venues || [];
+
+  /* 保持最新值給非同步流程（自動接續的去抖）讀，避免抓到過期的 closure。 */
+  const queuesRef = useRef(queues);
+  queuesRef.current = queues;
+  const metaRef = useRef(groupsMeta);
+  metaRef.current = groupsMeta;
+
+  /* 名單／場地的組成一變（重新匯入、清空、增刪場地）就重新 reconcile：
+     種進新項目、清掉孤兒。同一份組成下不會重跑，所以不會打架。
+     一般的開關與排序變動走 sWatch，不會動到這個 key。 */
+  const shapeKey =
+    Object.keys(groupsMeta).sort().join("|") +
+    "#" +
+    (venuesConfig.venues || []).map((v) => v.id).join("|");
+
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    (async () => {
+      const existing = (await getJSON("queues", {})) || {};
+      if (!active) return;
+      const r = reconcileQueues(groupsMeta, venuesConfig, existing);
+      setQueues(r.queues);
+      setReady(true);
+      if (r.changed) {
+        if (Object.keys(r.metaPatch).length) {
+          await sUpdate("groups-meta", r.metaPatch);
+          setGroupsMeta((prev) => applyMetaPatch(prev, r.metaPatch));
+        }
+        /* 逐場地更新而不是整份覆蓋：另一台管理裝置可能剛好在動別的場地。 */
+        const patch = {};
+        for (const vid of Object.keys(r.queues)) {
+          patch[`${vid}/order`] = r.queues[vid].order;
+          patch[`${vid}/done`] = r.queues[vid].done;
+          patch[`${vid}/auto`] = !!r.queues[vid].auto;
+        }
+        await sUpdate("queues", patch);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+    /* 相依只有 shapeKey：項目集合／場地集合變了才重跑，open 與排序的
+       日常變動不會觸發。 */
+  }, [enabled, shapeKey]);
+
+  useEffect(() => {
+    if (!ready) return;
+    /* v 為 null 代表整個 key 被刪掉（例如清空名單），要跟著清空，
+       否則畫面會停在已經不存在的舊佇列。 */
+    return sWatch("queues", (v) => setQueues(normalizeAll(v || {})));
+  }, [ready]);
+
+  /* 項目開關要即時反映到看板，自動接續也靠這個觀察到自己寫入的結果。 */
+  useEffect(() => {
+    return sWatch("groups-meta", (v) => setGroupsMeta(v || {}));
+  }, [setGroupsMeta]);
+
+  const commit = useCallback(
+    async (action) => {
+      const cur = queuesRef.current;
+      const meta = metaRef.current;
+      const { nextQueues, metaPatch, touched } = buildQueueMutation(
+        cur,
+        meta,
+        action
+      );
+      setQueues(nextQueues);
+      if (Object.keys(metaPatch).length) {
+        setGroupsMeta((prev) => applyMetaPatch(prev, metaPatch));
+        /* 先寫 meta（裁判端看到的東西），再寫 queue。 */
+        await sUpdate("groups-meta", metaPatch);
+      }
+      if (touched.length) {
+        const patch = {};
+        for (const vid of touched) {
+          const q = nextQueues[vid];
+          patch[`${vid}/order`] = q.order;
+          patch[`${vid}/done`] = q.done;
+          patch[`${vid}/auto`] = !!q.auto;
+          patch[`${vid}/updatedAt`] = Date.now();
+        }
+        const ok = await sUpdate("queues", patch);
+        if (!ok) {
+          const fresh = (await getJSON("queues", {})) || {};
+          setQueues(normalizeAll(fresh));
+        }
+      }
+    },
+    [setGroupsMeta]
+  );
+
+  /* 只監看每個場地的佇列首位：judgeCount+1 個 listener／場地，取代原本
+     每張卡片各跑一個 5 秒輪詢（54 組 × 3 裁判 ≈ 每 5 秒 216 次讀取）。 */
+  const heads = venues
+    .map((v) => ({ vid: v.id, gk: venueQueue(queues, v.id).order[0] || null }))
+    .filter((h) => h.gk);
+  const headsKey = heads.map((h) => `${h.vid}:${h.gk}`).join("|");
+  /* 按下「開始」時 headsKey 不變（首位還是同一個項目），但自動接續要重新
+     判斷，所以把 open 與 auto 也算進重掛的條件。 */
+  const armKey = heads
+    .map(
+      (h) =>
+        `${h.vid}:${groupsMeta[h.gk]?.open ? 1 : 0}:${
+          venueQueue(queues, h.vid).auto ? 1 : 0
+        }`
+    )
+    .join("|");
+
+  const advancingRef = useRef({});
+
+  useEffect(() => {
+    if (!ready) return;
+    const unsubs = [];
+    const timers = {};
+    let active = true;
+    /* 從 headsKey 還原清單，確保 effect body 讀到的一定是觸發它的那份，
+       不會跟相依陣列脫節。 */
+    const headsList = headsKey
+      ? headsKey.split("|").map((p) => {
+          const i = p.indexOf(":");
+          return { vid: p.slice(0, i), gk: p.slice(i + 1) };
+        })
+      : [];
+
+    for (const { vid, gk } of headsList) {
+      const venue = venues.find((v) => v.id === vid);
+      if (!venue) continue;
+
+      const check = async () => {
+        /* 每次都重讀 meta：headsKey 只在首位換人時改變，open 翻轉或名單
+           變動都不會重掛這個 effect，抓 closure 裡的舊值會算錯。 */
+        const meta = metaRef.current[gk];
+        if (!meta) return;
+        const st = await fetchGroupCompletion(gk, meta, venue, athletes);
+        if (!active) return;
+        setHeadStatus((prev) => ({ ...prev, [vid]: { gk, ...st } }));
+
+        /* 零位選手的項目永遠不會「完成」，會把佇列卡死 → 視為立即完成。 */
+        const complete = st.complete || (meta.athleteIds || []).length === 0;
+        const q = venueQueue(queuesRef.current, vid);
+        const m = metaRef.current[gk];
+        if (!complete || !q.auto || !m || !m.open) {
+          clearTimeout(timers[vid]);
+          return;
+        }
+
+        clearTimeout(timers[vid]);
+        /* 去抖：裁判長把 0 改成 0.3、或裁判修正打錯的字，都不該跟接續搶跑。
+           抖動讓兩台管理裝置不會在同一毫秒開火。 */
+        timers[vid] = setTimeout(async () => {
+          const key = `${vid}:${gk}`;
+          if (advancingRef.current[key]) return;
+          /* 去抖期間首位可能已被拖走或撤銷 */
+          if (venueQueue(queuesRef.current, vid).order[0] !== gk) return;
+          const mm = metaRef.current[gk];
+          if (!mm || !mm.open) return;
+          advancingRef.current[key] = true;
+          try {
+            await commit({ type: "advance", venueId: vid });
+          } finally {
+            delete advancingRef.current[key];
+          }
+        }, 1500 + 200 + Math.random() * 600);
+      };
+
+      check();
+      const keys = [
+        ...venue.judges.map((j) => `score:${gk}:${j.id}`),
+        `bonus:${gk}`,
+      ];
+      keys.forEach((k) => unsubs.push(sWatch(k, () => check())));
+    }
+
+    return () => {
+      active = false;
+      unsubs.forEach((off) => off());
+      Object.values(timers).forEach((t) => clearTimeout(t));
+    };
+  }, [ready, headsKey, armKey, athletes, venuesConfig, commit]);
+
+  return { queues, ready, headStatus, commit };
+}
+
+/* ------------------------------------------------------------------ */
+/* Events Tab（純畫面，佇列邏輯在 useQueueEngine）                      */
+/* ------------------------------------------------------------------ */
+function EventsTab({ groupsMeta, venuesConfig, engine }) {
+  const { queues, ready, headStatus, commit } = engine;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedGk, setSelectedGk] = useState(null);
+  const [activeCol, setActiveCol] = useState("pool");
+  const [dragGk, setDragGk] = useState(null);
+  const [confirmSkip, setConfirmSkip] = useState(null);
+
+  const isWide = useMediaQuery("(min-width: 900px)");
+  const isTouch = useMediaQuery("(pointer: coarse)");
+  const dndOn = isWide && !isTouch;
+
+  const venues = venuesConfig.venues || [];
+
+  const allKeys = Object.keys(groupsMeta);
+  const queuedSet = new Set();
+  for (const v of venues) {
+    const q = venueQueue(queues, v.id);
+    q.order.forEach((gk) => queuedSet.add(gk));
+    q.done.forEach((gk) => queuedSet.add(gk));
+  }
+  const poolKeys = allKeys
+    .filter((gk) => !queuedSet.has(gk))
+    .filter((gk) => {
+      const m = groupsMeta[gk];
+      const text = `${m.ageGroup} ${m.eventName} ${m.gender}`.toLowerCase();
+      return text.includes(searchQuery.toLowerCase());
     });
 
-  const keys = Object.keys(groupsMeta);
+  const placeInto = (gk, vid) => {
+    if (!gk) return;
+    if (vid === "pool") commit({ type: "remove", gk });
+    else commit({ type: "place", gk, toVenue: vid, toIndex: venueQueue(queues, vid).order.length });
+    setSelectedGk(null);
+  };
 
-  const filteredKeys = keys.filter((gk) => {
-    const m = groupsMeta[gk];
-    const text = `${m.ageGroup} ${m.eventName} ${m.gender}`.toLowerCase();
-    return text.includes(searchQuery.toLowerCase());
-  });
+  const moveBy = (gk, delta) => {
+    const loc = queueLocate(queues, gk);
+    if (!loc || loc.list !== "order") return;
+    commit({
+      type: "place",
+      gk,
+      toVenue: loc.venueId,
+      toIndex: loc.index + delta,
+    });
+  };
+
+  const askAdvance = (vid) => {
+    const st = headStatus[vid];
+    const q = venueQueue(queues, vid);
+    if (!q.order.length) return;
+    const meta = groupsMeta[q.order[0]];
+    const empty = (meta?.athleteIds || []).length === 0;
+    if (st && (st.complete || empty)) {
+      commit({ type: "advance", venueId: vid });
+    } else {
+      setConfirmSkip(vid);
+    }
+  };
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
+  );
+
+  const onDragEnd = (ev) => {
+    setDragGk(null);
+    const { active: a, over } = ev;
+    if (!a || !over) return;
+    const gk = String(a.id);
+    const overId = String(over.id);
+    if (overId === "pool") return placeInto(gk, "pool");
+    if (overId.startsWith("venue:")) {
+      const vid = overId.slice(6);
+      return commit({
+        type: "place",
+        gk,
+        toVenue: vid,
+        toIndex: venueQueue(queues, vid).order.length,
+      });
+    }
+    const loc = queueLocate(queues, overId);
+    if (!loc || loc.list !== "order") return;
+    if (overId === gk) return;
+    commit({ type: "place", gk, toVenue: loc.venueId, toIndex: loc.index });
+  };
+
+  if (!ready) return <Loading />;
+
+  const columns = [
+    { id: "pool", label: "資料庫", count: poolKeys.length },
+    ...venues.map((v) => ({
+      id: v.id,
+      label: v.name,
+      count: venueQueue(queues, v.id).order.length,
+    })),
+  ];
+
+  const poolCol = (
+    <PoolColumn
+      keys={poolKeys}
+      groupsMeta={groupsMeta}
+      searchQuery={searchQuery}
+      setSearchQuery={setSearchQuery}
+      selectedGk={selectedGk}
+      onSelect={(gk) => setSelectedGk((p) => (p === gk ? null : gk))}
+      onDrop={() => placeInto(selectedGk, "pool")}
+      venues={venues}
+      onMoveTo={(gk, vid) => placeInto(gk, vid)}
+      total={allKeys.length}
+      dndOn={dndOn}
+    />
+  );
+
+  const venueCols = venues.map((v) => (
+    <VenueColumn
+      key={v.id}
+      venue={v}
+      queue={venueQueue(queues, v.id)}
+      groupsMeta={groupsMeta}
+      headStatus={headStatus[v.id]}
+      selectedGk={selectedGk}
+      onSelect={(gk) => setSelectedGk((p) => (p === gk ? null : gk))}
+      onDrop={() => placeInto(selectedGk, v.id)}
+      onMoveBy={moveBy}
+      onMoveTo={(gk, vid) => placeInto(gk, vid)}
+      onRemove={(gk) => commit({ type: "remove", gk })}
+      onStart={(gk) => commit({ type: "start", gk })}
+      onAdvance={() => askAdvance(v.id)}
+      onToggleAuto={() => commit({ type: "toggleAuto", venueId: v.id })}
+      venues={venues}
+      dndOn={dndOn}
+    />
+  ));
+
+  const board = isWide ? (
+    <div
+      className="qboard"
+      style={{ display: "flex", gap: 12, alignItems: "flex-start" }}
+    >
+      <div style={{ flex: "1 1 0", minWidth: 0 }}>{poolCol}</div>
+      {venueCols.map((c, i) => (
+        <div key={venues[i].id} style={{ flex: "1 1 0", minWidth: 0 }}>
+          {c}
+        </div>
+      ))}
+    </div>
+  ) : (
+    <div className="qboard">
+      <div
+        style={{
+          display: "flex",
+          gap: 6,
+          overflowX: "auto",
+          marginBottom: 12,
+          paddingBottom: 4,
+        }}
+      >
+        {columns.map((c) => {
+          const on = activeCol === c.id;
+          const target = selectedGk && !on;
+          return (
+            <button
+              key={c.id}
+              onClick={() => {
+                if (target) placeInto(selectedGk, c.id);
+                setActiveCol(c.id);
+              }}
+              style={{
+                flex: "0 0 auto",
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: `1px solid ${target ? C.gold : on ? C.red : C.border}`,
+                background: on ? C.surfaceAlt : "transparent",
+                color: target ? C.gold : on ? C.text : C.textMuted,
+                fontFamily: FONT_BODY,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {c.label} ({c.count})
+              {target ? " ↓放這" : ""}
+            </button>
+          );
+        })}
+      </div>
+      {activeCol === "pool" ? poolCol : venueCols[venues.findIndex((v) => v.id === activeCol)] || poolCol}
+    </div>
+  );
+
+  const wrapped = dndOn ? (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCorners}
+      onDragStart={(e) => setDragGk(String(e.active.id))}
+      onDragEnd={onDragEnd}
+      onDragCancel={() => setDragGk(null)}
+    >
+      {board}
+      <DragOverlay>
+        {dragGk && groupsMeta[dragGk] ? (
+          <QueueItemCard
+            gk={dragGk}
+            m={groupsMeta[dragGk]}
+            state="queued"
+            dragging
+          />
+        ) : null}
+      </DragOverlay>
+    </DndContext>
+  ) : (
+    board
+  );
+
+  const skipVenue = venues.find((v) => v.id === confirmSkip);
+  const skipSt = confirmSkip ? headStatus[confirmSkip] : null;
 
   return (
     <div>
       <SectionTitle eyebrow="Step 3" title="項目控制" icon={LayoutGrid} />
       <div style={{ color: C.textMuted, fontSize: 13, marginBottom: 14 }}>
-        指派場地後開啟項目，裁判才會在該項目下看到參賽選手。當所有評分與裁判長加分完成後，按鈕會自動變為藍色「已完成」。
+        把項目從資料庫排進場地佇列。每個場地同時只跑首位一個項目，按「開始」裁判才看得到；
+        其餘是等候中。開啟「自動接續」後，評分與裁判長加分收齊會自動換下一個。
+        {dndOn ? "可直接拖動排序，也可" : "可"}點選項目再點目標場地移動。
       </div>
+      {wrapped}
+      {confirmSkip && (
+        <Confirm
+          open
+          text={`${skipVenue?.name || ""} 目前的項目還沒收齊分數${
+            skipSt ? `（${skipSt.submitted}/${skipSt.expected}）` : ""
+          }，仍要跳到下一項嗎？`}
+          onNo={() => setConfirmSkip(null)}
+          onYes={() => {
+            commit({ type: "advance", venueId: confirmSkip });
+            setConfirmSkip(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
 
-      {/* 快速搜尋列 */}
-      <div style={{ position: "relative", marginBottom: 16 }}>
+/* 把 "gk/field" 形式的 patch 套回本地的 groupsMeta，讓 UI 立刻反應。 */
+function applyMetaPatch(meta, patch) {
+  const next = { ...meta };
+  for (const [path, val] of Object.entries(patch)) {
+    const i = path.indexOf("/");
+    const gk = path.slice(0, i);
+    const field = path.slice(i + 1);
+    if (!next[gk]) continue;
+    next[gk] = { ...next[gk], [field]: val };
+  }
+  return next;
+}
+
+const normalizeAll = (raw) => {
+  const out = {};
+  for (const vid of Object.keys(raw || {})) out[vid] = normQueue(raw[vid]);
+  return out;
+};
+
+function ColumnShell({ title, subtitle, right, onDrop, dropActive, children, droppableId, dndOn }) {
+  const dz = useDroppableSafe(droppableId, dndOn);
+  return (
+    <div
+      ref={dz.setNodeRef}
+      style={{
+        background: dz.isOver ? C.surfaceAlt : C.surface,
+        border: `1px solid ${dropActive || dz.isOver ? C.gold : C.border}`,
+        borderRadius: 10,
+        padding: 12,
+      }}
+    >
+      <div
+        onClick={dropActive ? onDrop : undefined}
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 10,
+          cursor: dropActive ? "pointer" : "default",
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              color: dropActive ? C.gold : C.text,
+              fontSize: 14,
+              fontWeight: 700,
+              fontFamily: FONT_DISPLAY,
+              letterSpacing: 0.4,
+            }}
+          >
+            {dropActive ? `↓ 放到 ${title}` : title}
+          </div>
+          {subtitle && (
+            <div style={{ color: C.textFaint, fontSize: 11.5, marginTop: 2 }}>
+              {subtitle}
+            </div>
+          )}
+        </div>
+        {right}
+      </div>
+      <div
+        className="qcol"
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          maxHeight: "62vh",
+          overflowY: "auto",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* useDroppable 只能在 DndContext 內呼叫，桌面以外要退回無操作版本。
+   hook 不能有條件地呼叫，所以用兩個元件包裝，由 dndOn 決定渲染哪個。 */
+function useDroppableSafe(id, dndOn) {
+  const noop = { setNodeRef: undefined, isOver: false };
+  const real = useDroppable({ id, disabled: !dndOn });
+  return dndOn ? real : noop;
+}
+
+function PoolColumn({
+  keys,
+  groupsMeta,
+  searchQuery,
+  setSearchQuery,
+  selectedGk,
+  onSelect,
+  onDrop,
+  venues,
+  onMoveTo,
+  total,
+  dndOn,
+}) {
+  const dropActive = !!selectedGk && !keys.includes(selectedGk);
+  return (
+    <ColumnShell
+      title="資料庫"
+      subtitle={`${keys.length} / ${total} 個項目未排入場地`}
+      onDrop={onDrop}
+      dropActive={dropActive}
+      droppableId="pool"
+      dndOn={dndOn}
+    >
+      <div style={{ position: "relative", marginBottom: 4 }}>
         <Search
-          size={16}
+          size={15}
           color={C.textFaint}
           style={{
             position: "absolute",
-            left: 12,
+            left: 11,
             top: "50%",
             transform: "translateY(-50%)",
           }}
@@ -1488,136 +2455,367 @@ function EventsTab({ groupsMeta, setGroupsMeta, venuesConfig, athletes }) {
           placeholder="快速搜尋項目、年齡組或組別..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          style={{ paddingLeft: 38 }}
+          style={{ paddingLeft: 34 }}
         />
       </div>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {keys.length === 0 && (
-          <div style={{ color: C.textFaint, fontSize: 13 }}>請先匯入名單</div>
-        )}
-        {keys.length > 0 && filteredKeys.length === 0 && (
-          <div style={{ color: C.textFaint, fontSize: 13 }}>
-            沒有找到符合的項目
-          </div>
-        )}
-        {filteredKeys.map((gk) => {
-          const m = groupsMeta[gk];
-          const venue = venuesConfig.venues.find((v) => v.id === m.venueId);
-
-          return (
-            <EventsCardItem
-              key={gk}
-              gk={gk}
-              m={m}
-              venue={venue}
-              athletes={athletes}
-              onAssignVenue={assignVenue}
-              onToggleOpen={toggleOpen}
-              venuesConfig={venuesConfig}
-            />
-          );
-        })}
-      </div>
-    </div>
+      {total === 0 && (
+        <div style={{ color: C.textFaint, fontSize: 13 }}>請先匯入名單</div>
+      )}
+      {total > 0 && keys.length === 0 && (
+        <div style={{ color: C.textFaint, fontSize: 13, padding: "6px 2px" }}>
+          {searchQuery ? "沒有找到符合的項目" : "全部項目都已排入場地"}
+        </div>
+      )}
+      {keys.map((gk) => (
+        <QueueItemCard
+          key={gk}
+          gk={gk}
+          m={groupsMeta[gk]}
+          state="idle"
+          selected={selectedGk === gk}
+          onSelect={() => onSelect(gk)}
+          venues={venues}
+          onMoveTo={onMoveTo}
+          dndOn={dndOn}
+          sortable={false}
+        />
+      ))}
+    </ColumnShell>
   );
 }
 
-function EventsCardItem({
-  gk,
-  m,
+function VenueColumn({
   venue,
-  athletes,
-  onAssignVenue,
-  onToggleOpen,
-  venuesConfig,
+  queue,
+  groupsMeta,
+  headStatus,
+  selectedGk,
+  onSelect,
+  onDrop,
+  onMoveBy,
+  onMoveTo,
+  onRemove,
+  onStart,
+  onAdvance,
+  onToggleAuto,
+  venues,
+  dndOn,
 }) {
-  const [isCompleted, setIsCompleted] = useState(false);
+  const [showDone, setShowDone] = useState(false);
+  const dropActive = !!selectedGk && !queue.order.includes(selectedGk);
+  const head = queue.order[0];
+  const headMeta = head ? groupsMeta[head] : null;
+  const stMatches = headStatus && headStatus.gk === head ? headStatus : null;
 
-  useEffect(() => {
-    let active = true;
-    async function checkComplete() {
-      if (!venue || !m.athleteIds || m.athleteIds.length === 0) {
-        if (active) setIsCompleted(false);
-        return;
-      }
-      const res = await computeGroupResults(gk, m, venue, athletes);
-      if (!res || res.length === 0) {
-        if (active) setIsCompleted(false);
-        return;
-      }
-      const bonusMap = (await getJSON(`bonus:${gk}`, {})) || {};
-      const allDone = res.every(
-        (r) => r.complete && typeof bonusMap[r.athlete.id] === "number"
-      );
-      if (active) setIsCompleted(allDone);
-    }
-    checkComplete();
-    const t = setInterval(checkComplete, 5000);
-    return () => {
-      active = false;
-      clearInterval(t);
-    };
-  }, [gk, m, venue, athletes]);
+  const body = (
+    <>
+      {queue.order.length === 0 && (
+        <div style={{ color: C.textFaint, fontSize: 13, padding: "6px 2px" }}>
+          佇列已空
+        </div>
+      )}
+      {queue.order.map((gk, i) => {
+        const m = groupsMeta[gk];
+        if (!m) return null;
+        const state = i === 0 ? (m.open ? "running" : "ready") : "queued";
+        return (
+          <QueueItemCard
+            key={gk}
+            gk={gk}
+            m={m}
+            state={state}
+            position={i + 1}
+            completion={i === 0 ? stMatches : null}
+            selected={selectedGk === gk}
+            onSelect={() => onSelect(gk)}
+            onUp={i > 0 ? () => onMoveBy(gk, -1) : null}
+            onDown={i < queue.order.length - 1 ? () => onMoveBy(gk, 1) : null}
+            onStart={state === "ready" ? () => onStart(gk) : null}
+            onRemove={() => onRemove(gk)}
+            venues={venues}
+            onMoveTo={onMoveTo}
+            dndOn={dndOn}
+            sortable
+          />
+        );
+      })}
+    </>
+  );
 
   return (
-    <Card style={{ padding: 14 }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 10,
-        }}
-      >
-        <div>
-          <div style={{ color: C.text, fontSize: 14.5, fontWeight: 600 }}>
-            {m.ageGroup} · {m.eventName} · {m.gender}
-          </div>
-          <div style={{ color: C.textFaint, fontSize: 12 }}>
-            {m.athleteIds?.length || 0} 位選手
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <Select
-            value={m.venueId || ""}
-            onChange={(e) => onAssignVenue(gk, e.target.value || null)}
-            style={{ width: 150 }}
-          >
-            <option value="">未指派場地</option>
-            {venuesConfig.venues.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.name}（{v.judgeCount}裁判）
-              </option>
-            ))}
-          </Select>
+    <ColumnShell
+      title={venue.name}
+      subtitle={
+        queue.auto
+          ? "自動接續：開啟（需保持總控台開著）"
+          : `${venue.judgeCount} 位裁判 · 自動接續關閉`
+      }
+      onDrop={onDrop}
+      dropActive={dropActive}
+      droppableId={`venue:${venue.id}`}
+      dndOn={dndOn}
+      right={
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <Btn
             size="sm"
-            variant={isCompleted ? "gold" : m.open ? "primary" : "default"}
-            onClick={() => onToggleOpen(gk)}
-            disabled={!venue}
-            style={{
-              background: isCompleted ? C.blue : m.open ? C.red : undefined,
-              borderColor: isCompleted ? C.blue : m.open ? C.red : undefined,
-              color: isCompleted || m.open ? "#FFF" : undefined,
-            }}
+            variant={queue.auto ? "gold" : "ghost"}
+            onClick={onToggleAuto}
+            title="評分收齊後自動換下一個項目"
           >
-            {isCompleted ? (
-              <>
-                <Check size={14} /> 已完成
-              </>
-            ) : m.open ? (
-              <>
-                <Check size={14} /> 進行中
-              </>
-            ) : (
-              "開啟評分"
-            )}
+            <Zap size={13} /> 自動
+          </Btn>
+          <Btn
+            size="sm"
+            variant="ghost"
+            onClick={onAdvance}
+            disabled={!queue.order.length}
+            title="跳到下一個項目"
+          >
+            <SkipForward size={13} />
           </Btn>
         </div>
+      }
+    >
+      {headMeta && stMatches && (
+        <div
+          style={{
+            fontSize: 11.5,
+            color: stMatches.complete ? C.blue : C.textMuted,
+            fontFamily: FONT_MONO,
+            padding: "2px 2px 4px",
+          }}
+        >
+          首位進度 {stMatches.submitted}/{stMatches.expected}
+          {stMatches.complete ? " · 已收齊" : ""}
+        </div>
+      )}
+      {dndOn ? (
+        <SortableContext items={queue.order} strategy={verticalListSortingStrategy}>
+          {body}
+        </SortableContext>
+      ) : (
+        body
+      )}
+      {queue.done.length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          <button
+            onClick={() => setShowDone((s) => !s)}
+            style={{
+              background: "none",
+              border: "none",
+              color: C.textFaint,
+              fontSize: 12,
+              fontFamily: FONT_BODY,
+              cursor: "pointer",
+              padding: "4px 2px",
+            }}
+          >
+            {showDone ? "▾" : "▸"} 已完成 ({queue.done.length})
+          </button>
+          {showDone &&
+            queue.done.map((gk) => {
+              const m = groupsMeta[gk];
+              if (!m) return null;
+              return (
+                <QueueItemCard
+                  key={gk}
+                  gk={gk}
+                  m={m}
+                  state="done"
+                  selected={selectedGk === gk}
+                  onSelect={() => onSelect(gk)}
+                  onStart={() => onStart(gk)}
+                  onRemove={() => onRemove(gk)}
+                  venues={venues}
+                  onMoveTo={onMoveTo}
+                  dndOn={false}
+                  sortable={false}
+                />
+              );
+            })}
+        </div>
+      )}
+    </ColumnShell>
+  );
+}
+
+const STATE_BADGE = {
+  idle: null,
+  queued: { tone: "default", label: "等候中" },
+  ready: { tone: "pending", label: "待開始" },
+  running: { tone: "open", label: "進行中" },
+  done: { tone: "gold", label: "已完成" },
+};
+
+function QueueItemCard(props) {
+  /* sortable 版本要呼叫 useSortable，非 sortable 版本不能呼叫（hook 規則），
+     所以拆成兩個元件由外層挑。 */
+  return props.sortable && props.dndOn ? (
+    <SortableQueueItem {...props} />
+  ) : (
+    <QueueItemBody {...props} />
+  );
+}
+
+function SortableQueueItem(props) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: props.gk });
+  return (
+    <QueueItemBody
+      {...props}
+      setNodeRef={setNodeRef}
+      handleProps={{ ...attributes, ...listeners }}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.4 : 1,
+      }}
+    />
+  );
+}
+
+function QueueItemBody({
+  gk,
+  m,
+  state = "idle",
+  position,
+  completion,
+  selected,
+  onSelect,
+  onUp,
+  onDown,
+  onStart,
+  onRemove,
+  venues,
+  onMoveTo,
+  dragging,
+  setNodeRef,
+  handleProps,
+  style,
+}) {
+  const badge = STATE_BADGE[state];
+  const accent =
+    state === "running" ? C.red : state === "done" ? C.blue : state === "ready" ? C.gold : null;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        border: `1px solid ${selected ? C.gold : C.border}`,
+        borderLeft: accent ? `3px solid ${accent}` : `1px solid ${selected ? C.gold : C.border}`,
+        borderRadius: 8,
+        background: dragging ? C.surfaceAlt : C.surface,
+        padding: "8px 10px",
+        boxShadow: selected ? `0 0 0 2px ${C.gold}33` : undefined,
+        ...style,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+        {handleProps && (
+          <span className="qhandle" {...handleProps} style={{ paddingTop: 2 }}>
+            <GripVertical size={15} color={C.textFaint} />
+          </span>
+        )}
+        <div
+          onClick={onSelect}
+          style={{ flex: 1, minWidth: 0, cursor: onSelect ? "pointer" : "default" }}
+        >
+          <div
+            style={{
+              color: C.text,
+              fontSize: 13.5,
+              fontWeight: 600,
+              lineHeight: 1.35,
+            }}
+          >
+            {position ? (
+              <span style={{ color: C.textFaint, fontFamily: FONT_MONO }}>
+                #{position}{" "}
+              </span>
+            ) : null}
+            {m.ageGroup} · {m.eventName} · {m.gender}
+          </div>
+          <div
+            style={{
+              color: C.textFaint,
+              fontSize: 11.5,
+              marginTop: 2,
+              display: "flex",
+              gap: 8,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <span>{m.athleteIds?.length || 0} 位選手</span>
+            {badge && <Badge tone={badge.tone}>{badge.label}</Badge>}
+            {completion && state === "running" && (
+              <span style={{ fontFamily: FONT_MONO }}>
+                {completion.submitted}/{completion.expected}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
-    </Card>
+
+      {(onUp || onDown || onStart || onRemove || onMoveTo) && (
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            marginTop: 8,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          {onUp !== undefined && (
+            <Btn size="sm" variant="ghost" onClick={onUp} disabled={!onUp}>
+              <ArrowUp size={13} />
+            </Btn>
+          )}
+          {onDown !== undefined && (
+            <Btn size="sm" variant="ghost" onClick={onDown} disabled={!onDown}>
+              <ArrowDown size={13} />
+            </Btn>
+          )}
+          {onStart && (
+            <Btn
+              size="sm"
+              variant="primary"
+              onClick={onStart}
+              style={
+                state === "done"
+                  ? undefined
+                  : { background: C.red, borderColor: C.red, color: "#FFF" }
+              }
+            >
+              <Play size={13} /> {state === "done" ? "重新開啟" : "開始"}
+            </Btn>
+          )}
+          {onMoveTo && (
+            <Select
+              value=""
+              onChange={(e) => e.target.value && onMoveTo(gk, e.target.value)}
+              style={{ width: 108, height: 30, fontSize: 12, padding: "0 8px" }}
+            >
+              <option value="">移至…</option>
+              <option value="pool">資料庫</option>
+              {venues
+                .filter((v) => v.id !== m.venueId)
+                .map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+            </Select>
+          )}
+          {onRemove && (
+            <Btn size="sm" variant="ghost" onClick={onRemove} title="拉回資料庫">
+              <Undo2 size={13} />
+            </Btn>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2225,45 +3423,24 @@ function JudgeScoring({
   myLabel,
   onBack,
 }) {
-  const [openGroups, setOpenGroups] = useState([]);
   const [gk, setGk] = useState("");
-  const [loadingGroups, setLoadingGroups] = useState(true);
 
+  /* 管理端的佇列保證一個場地同時只有一個項目 open，所以這裡不必再去算
+     「這個項目是不是已經評完了」——那原本要對每個候選項目做
+     judgeCount+1 次讀取、每 4 秒一輪。groupsMeta 由 JudgePortal 的
+     sWatch 即時推過來，純推導就夠了。 */
+  const openGroups = Object.entries(groupsMeta).filter(
+    ([, m]) => m.venueId === venue.id && m.open
+  );
+
+  /* 管理端換項目時自動跟著跳，裁判不用自己選。 */
+  /* 以字串當相依，openGroups 每次 render 都是新陣列，直接放進相依會讓
+     effect 每次都跑。 */
+  const openKeys = openGroups.map(([k]) => k).join("|");
   useEffect(() => {
-    let active = true;
-    async function filterGroups() {
-      const candidateEntries = Object.entries(groupsMeta).filter(
-        ([, m]) => m.venueId === venue.id && m.open
-      );
-      const available = [];
-      for (const [k, m] of candidateEntries) {
-        const res = await computeGroupResults(k, m, venue, athletes);
-        const bonusMap = (await getJSON(`bonus:${k}`, {})) || {};
-        const allDone =
-          res &&
-          res.length > 0 &&
-          res.every(
-            (r) => r.complete && typeof bonusMap[r.athlete.id] === "number"
-          );
-        if (!allDone) {
-          available.push([k, m]);
-        }
-      }
-      if (active) {
-        setOpenGroups(available);
-        if (!available.some(([k]) => k === gk)) {
-          setGk(available[0]?.[0] || "");
-        }
-        setLoadingGroups(false);
-      }
-    }
-    filterGroups();
-    const t = setInterval(filterGroups, 4000);
-    return () => {
-      active = false;
-      clearInterval(t);
-    };
-  }, [groupsMeta, venue, athletes, gk]);
+    const keys = openKeys ? openKeys.split("|") : [];
+    setGk((cur) => (keys.includes(cur) ? cur : keys[0] || ""));
+  }, [openKeys]);
 
   return (
     <div style={{ minHeight: "100vh" }}>
@@ -2285,9 +3462,7 @@ function JudgeScoring({
         </div>
       </div>
       <div style={{ padding: 20, maxWidth: 640, margin: "0 auto" }}>
-        {loadingGroups ? (
-          <Loading />
-        ) : openGroups.length === 0 ? (
+        {openGroups.length === 0 ? (
           <Card
             style={{ padding: 20, textAlign: "center", color: C.textFaint }}
           >
@@ -2649,6 +3824,11 @@ export default function App() {
         @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
         .spin { animation: spin 1s linear infinite; }
         * { box-sizing: border-box; }
+        .qcol::-webkit-scrollbar { width: 6px; }
+        .qcol::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 3px; }
+        .qboard { touch-action: pan-y; }
+        .qhandle { cursor: grab; touch-action: none; }
+        .qhandle:active { cursor: grabbing; }
       `}</style>
       {!role && <Landing onPick={setRole} />}
       {role === "admin" && <AdminConsole onBack={() => setRole(null)} />}
