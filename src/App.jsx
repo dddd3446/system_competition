@@ -24,6 +24,26 @@ import {
   LayoutGrid,
   Search,
 } from "lucide-react";
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, get, set, remove } from "firebase/database";
+
+/* ------------------------------------------------------------------ */
+/* Firebase Cloud Configuration & Initialization                      */
+/* ------------------------------------------------------------------ */
+const firebaseConfig = {
+  apiKey: "AIzaSyA2iSnXRCrd0Egp0C3whP9g2WhXkK5L1dc",
+  authDomain: "wushu-competition-system.firebaseapp.com",
+  databaseURL:
+    "https://wushu-competition-system-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "wushu-competition-system",
+  storageBucket: "wushu-competition-system.appspot.com",
+  messagingSenderId: "398264756758",
+  appId: "1:398264756758:web:1ef557b44bd19ce2d76337",
+  measurementId: "G-BMSGB1R7H",
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
 
 /* ------------------------------------------------------------------ */
 /* Design tokens                                                      */
@@ -54,27 +74,27 @@ const FONT_BODY = "'Inter', system-ui, -apple-system, sans-serif";
 const FONT_MONO = "'JetBrains Mono', 'Roboto Mono', monospace";
 
 /* ------------------------------------------------------------------ */
-/* Storage helpers (標準 localStorage)                                 */
+/* Storage helpers (Firebase 雲端即時同步)                             */
 /* ------------------------------------------------------------------ */
-async function sGet(key, shared = true) {
+async function sGet(key) {
   try {
-    const v = localStorage.getItem(key);
-    return v ? JSON.parse(v) : null;
+    const snapshot = await get(ref(db, "wushu_data/" + key));
+    return snapshot.exists() ? snapshot.val() : null;
   } catch (e) {
     return null;
   }
 }
-async function sSet(key, value, shared = true) {
+async function sSet(key, value) {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    await set(ref(db, "wushu_data/" + key), value);
     return true;
   } catch (e) {
     return false;
   }
 }
-async function sDel(key, shared = true) {
+async function sDel(key) {
   try {
-    localStorage.removeItem(key);
+    await remove(ref(db, "wushu_data/" + key));
     return true;
   } catch (e) {
     return false;
