@@ -1,8 +1,0 @@
-{
-  "buildCommand": "cd test && npm install && npm run build",
-  "outputDirectory": "test/build",
-  "installCommand": "echo skip",
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
-  ]
-}
