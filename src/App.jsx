@@ -2167,9 +2167,20 @@ function EventsTab({ groupsMeta, venuesConfig, engine }) {
         toIndex: venueQueue(queues, vid).order.length,
       });
     }
-    const loc = queueLocate(queues, overId);
-    if (!loc || loc.list !== "order") return;
     if (overId === gk) return;
+    const loc = queueLocate(queues, overId);
+    /* 落在資料庫的某張卡上 = 落在資料庫欄，等於「拉回資料庫」。
+       沒有這條的話，拖到資料庫的項目上會靜靜地什麼都不做。 */
+    if (!loc) return placeInto(gk, "pool");
+    /* 落在「已完成」區的卡片上：當成放到該場地佇列末端，不要塞進已完成。 */
+    if (loc.list !== "order") {
+      return commit({
+        type: "place",
+        gk,
+        toVenue: loc.venueId,
+        toIndex: venueQueue(queues, loc.venueId).order.length,
+      });
+    }
     commit({ type: "place", gk, toVenue: loc.venueId, toIndex: loc.index });
   };
 
@@ -2355,6 +2366,7 @@ function ColumnShell({ title, subtitle, right, onDrop, dropActive, children, dro
   return (
     <div
       ref={dz.setNodeRef}
+      data-col={String(droppableId).replace(/^venue:/, "")}
       style={{
         background: dz.isOver ? C.surfaceAlt : C.surface,
         border: `1px solid ${dropActive || dz.isOver ? C.gold : C.border}`,
@@ -2466,20 +2478,24 @@ function PoolColumn({
           {searchQuery ? "沒有找到符合的項目" : "全部項目都已排入場地"}
         </div>
       )}
-      {keys.map((gk) => (
-        <QueueItemCard
-          key={gk}
-          gk={gk}
-          m={groupsMeta[gk]}
-          state="idle"
-          selected={selectedGk === gk}
-          onSelect={() => onSelect(gk)}
-          venues={venues}
-          onMoveTo={onMoveTo}
-          dndOn={dndOn}
-          sortable={false}
-        />
-      ))}
+      {/* 資料庫的項目沒有順序，但一樣要能被拿起來拖走，所以照樣包
+          SortableContext——少了它 dnd-kit 不會註冊這些節點。 */}
+      <SortableList items={keys} dndOn={dndOn}>
+        {keys.map((gk) => (
+          <QueueItemCard
+            key={gk}
+            gk={gk}
+            m={groupsMeta[gk]}
+            state="idle"
+            selected={selectedGk === gk}
+            onSelect={() => onSelect(gk)}
+            venues={venues}
+            onMoveTo={onMoveTo}
+            dndOn={dndOn}
+            sortable
+          />
+        ))}
+      </SortableList>
     </ColumnShell>
   );
 }
@@ -2589,13 +2605,9 @@ function VenueColumn({
           {stMatches.complete ? " · 已收齊" : ""}
         </div>
       )}
-      {dndOn ? (
-        <SortableContext items={queue.order} strategy={verticalListSortingStrategy}>
-          {body}
-        </SortableContext>
-      ) : (
-        body
-      )}
+      <SortableList items={queue.order} dndOn={dndOn}>
+        {body}
+      </SortableList>
       {queue.done.length > 0 && (
         <div style={{ marginTop: 6 }}>
           <button
@@ -2612,30 +2624,44 @@ function VenueColumn({
           >
             {showDone ? "▾" : "▸"} 已完成 ({queue.done.length})
           </button>
-          {showDone &&
-            queue.done.map((gk) => {
-              const m = groupsMeta[gk];
-              if (!m) return null;
-              return (
-                <QueueItemCard
-                  key={gk}
-                  gk={gk}
-                  m={m}
-                  state="done"
-                  selected={selectedGk === gk}
-                  onSelect={() => onSelect(gk)}
-                  onStart={() => onStart(gk)}
-                  onRemove={() => onRemove(gk)}
-                  venues={venues}
-                  onMoveTo={onMoveTo}
-                  dndOn={false}
-                  sortable={false}
-                />
-              );
-            })}
+          {showDone && (
+            <SortableList items={queue.done} dndOn={dndOn}>
+              {queue.done.map((gk) => {
+                const m = groupsMeta[gk];
+                if (!m) return null;
+                return (
+                  <QueueItemCard
+                    key={gk}
+                    gk={gk}
+                    m={m}
+                    state="done"
+                    selected={selectedGk === gk}
+                    onSelect={() => onSelect(gk)}
+                    onStart={() => onStart(gk)}
+                    onRemove={() => onRemove(gk)}
+                    venues={venues}
+                    onMoveTo={onMoveTo}
+                    dndOn={dndOn}
+                    sortable
+                  />
+                );
+              })}
+            </SortableList>
+          )}
         </div>
       )}
     </ColumnShell>
+  );
+}
+
+/* SortableContext 只能在 DndContext 內使用，手機沒有 DndContext 就直接
+   渲染子節點。 */
+function SortableList({ items, dndOn, children }) {
+  if (!dndOn) return <>{children}</>;
+  return (
+    <SortableContext items={items} strategy={verticalListSortingStrategy}>
+      {children}
+    </SortableContext>
   );
 }
 
@@ -2700,6 +2726,12 @@ function QueueItemBody({
   return (
     <div
       ref={setNodeRef}
+      /* 整張卡都是拖動區，不只把手：桌面上抓卡片中間拖不動會覺得壞掉。
+         PointerSensor 的 6px 門檻負責分辨「點一下＝選取」與「拖」。 */
+      {...(handleProps || {})}
+      className={handleProps ? "qhandle" : undefined}
+      data-gk={gk}
+      data-selected={selected ? "true" : "false"}
       style={{
         border: `1px solid ${selected ? C.gold : C.border}`,
         borderLeft: accent ? `3px solid ${accent}` : `1px solid ${selected ? C.gold : C.border}`,
@@ -2712,12 +2744,15 @@ function QueueItemBody({
     >
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
         {handleProps && (
-          <span className="qhandle" {...handleProps} style={{ paddingTop: 2 }}>
-            <GripVertical size={15} color={C.textFaint} />
-          </span>
+          <GripVertical
+            size={15}
+            color={C.textFaint}
+            style={{ marginTop: 2, flexShrink: 0 }}
+          />
         )}
         <div
           onClick={onSelect}
+          data-role="cardbody"
           style={{ flex: 1, minWidth: 0, cursor: onSelect ? "pointer" : "default" }}
         >
           <div
@@ -2759,6 +2794,9 @@ function QueueItemBody({
 
       {(onUp || onDown || onStart || onRemove || onMoveTo) && (
         <div
+          /* 按鈕列不該啟動拖動，也不該把點擊當成選取。 */
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           style={{
             display: "flex",
             gap: 6,
