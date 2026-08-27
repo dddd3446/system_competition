@@ -2101,6 +2101,16 @@ function EventsTab({ groupsMeta, venuesConfig, engine }) {
 
   const venues = venuesConfig.venues || [];
 
+  /* 佇列一變就跑一次 FLIP，讓卡片滑到新位置而不是瞬間跳過去。
+     拖動進行中不animate，那時 dnd-kit 已經在動了。 */
+  const layoutKey = venues
+    .map((v) => {
+      const q = venueQueue(queues, v.id);
+      return `${v.id}:${q.order.join(",")}:${q.done.join(",")}`;
+    })
+    .join("|");
+  useFlipAnimation([layoutKey, activeCol], !dragGk);
+
   const allKeys = Object.keys(groupsMeta);
   const queuedSet = new Set();
   for (const v of venues) {
@@ -2665,6 +2675,49 @@ function SortableList({ items, dndOn, children }) {
   );
 }
 
+/* 按鈕上只放場地編號。優先用名稱裡的數字（「場地 1」→「1」），
+   取不到就用排列位置，這樣自訂名稱（例如「主場」）也不會變成空白。 */
+function venueShortLabel(venue, index) {
+  const digits = String(venue.name || "").match(/\d+/);
+  return digits ? digits[0] : String(index + 1);
+}
+
+/*
+  FLIP 動畫：按上下箭頭或跨欄移動時，卡片是直接跳到新位置的，很難看出
+  到底換了什麼。這裡在每次 render 後比對每張卡片的新舊座標，先用
+  transform 把它「拉回」舊位置，再放掉讓它滑過去。
+
+  用 data-gk 當識別，所以跨欄移動（資料庫 → 場地）也會滑，不只是同欄調序。
+  拖動中的卡片交給 dnd-kit 自己處理，這裡略過，否則兩套動畫會打架。
+*/
+function useFlipAnimation(deps, enabled = true) {
+  const prev = useRef(new Map());
+  useEffect(() => {
+    if (!enabled) return;
+    const nodes = document.querySelectorAll("[data-gk]");
+    const next = new Map();
+    nodes.forEach((el) => {
+      const gk = el.getAttribute("data-gk");
+      const box = el.getBoundingClientRect();
+      next.set(gk, box);
+      const old = prev.current.get(gk);
+      if (!old) return;
+      const dx = old.left - box.left;
+      const dy = old.top - box.top;
+      /* 只有真的移動了才動畫，1px 以內當成沒動（避免捲動造成的抖動）。 */
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      el.animate(
+        [
+          { transform: `translate(${dx}px, ${dy}px)` },
+          { transform: "translate(0, 0)" },
+        ],
+        { duration: 220, easing: "cubic-bezier(0.2, 0, 0.2, 1)" }
+      );
+    });
+    prev.current = next;
+  }, deps);
+}
+
 const STATE_BADGE = {
   idle: null,
   queued: { tone: "default", label: "等候中" },
@@ -2799,58 +2852,102 @@ function QueueItemBody({
           onClick={(e) => e.stopPropagation()}
           style={{
             display: "flex",
-            gap: 6,
+            gap: 4,
             marginTop: 8,
             alignItems: "center",
             flexWrap: "wrap",
           }}
         >
           {onUp !== undefined && (
-            <Btn size="sm" variant="ghost" onClick={onUp} disabled={!onUp}>
+            <Btn
+              size="sm"
+              variant="ghost"
+              onClick={onUp}
+              disabled={!onUp}
+              title="上移"
+            >
               <ArrowUp size={13} />
             </Btn>
           )}
           {onDown !== undefined && (
-            <Btn size="sm" variant="ghost" onClick={onDown} disabled={!onDown}>
+            <Btn
+              size="sm"
+              variant="ghost"
+              onClick={onDown}
+              disabled={!onDown}
+              title="下移"
+            >
               <ArrowDown size={13} />
             </Btn>
           )}
-          {onStart && (
-            <Btn
-              size="sm"
-              variant="primary"
-              onClick={onStart}
-              style={
-                state === "done"
-                  ? undefined
-                  : { background: C.red, borderColor: C.red, color: "#FFF" }
-              }
+          {/* 場地直接一個一個列成按鈕：下拉選單要點三下（開、選、關），
+              按鈕一下就到。場地數量本來就少，排得下。 */}
+          {onMoveTo && venues.length > 0 && (
+            <span
+              style={{
+                color: C.textFaint,
+                fontSize: 11.5,
+                marginLeft: 2,
+                whiteSpace: "nowrap",
+              }}
             >
-              <Play size={13} /> {state === "done" ? "重新開啟" : "開始"}
-            </Btn>
+              移至
+            </span>
           )}
-          {onMoveTo && (
-            <Select
-              value=""
-              onChange={(e) => e.target.value && onMoveTo(gk, e.target.value)}
-              style={{ width: 108, height: 30, fontSize: 12, padding: "0 8px" }}
-            >
-              <option value="">移至…</option>
-              <option value="pool">資料庫</option>
-              {venues
-                .filter((v) => v.id !== m.venueId)
-                .map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                  </option>
-                ))}
-            </Select>
-          )}
+          {onMoveTo &&
+            venues.map((v, i) => {
+              const here = v.id === m.venueId;
+              return (
+                <Btn
+                  key={v.id}
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => !here && onMoveTo(gk, v.id)}
+                  disabled={here}
+                  title={here ? `已在${v.name}` : `移至 ${v.name}`}
+                  style={{
+                    minWidth: 28,
+                    justifyContent: "center",
+                    padding: "5px 8px",
+                    fontFamily: FONT_MONO,
+                    border: `1px solid ${here ? "transparent" : C.border}`,
+                    color: here ? C.textFaint : C.textMuted,
+                  }}
+                >
+                  {venueShortLabel(v, i)}
+                </Btn>
+              );
+            })}
           {onRemove && (
             <Btn size="sm" variant="ghost" onClick={onRemove} title="拉回資料庫">
               <Undo2 size={13} />
             </Btn>
           )}
+        </div>
+      )}
+
+      {/* 開始／重新開啟自己一列並且佔滿寬度：它是這張卡最重要的動作，
+          跟一排小按鈕擠在一起會被換行擠到不上不下。 */}
+      {onStart && (
+        <div
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          style={{ marginTop: 6 }}
+        >
+          <Btn
+            size="sm"
+            variant="primary"
+            onClick={onStart}
+            style={{
+              width: "100%",
+              justifyContent: "center",
+              ...(state === "done"
+                ? {}
+                : { background: C.red, borderColor: C.red, color: "#FFF" }),
+            }}
+          >
+            <Play size={13} /> {state === "done" ? "重新開啟" : "開始"}
+          </Btn>
         </div>
       )}
     </div>
