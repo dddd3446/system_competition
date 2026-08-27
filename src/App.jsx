@@ -25,7 +25,7 @@ import {
   Search,
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
-import { getDatabase, ref, get, set, remove } from "firebase/database";
+import { getDatabase, ref, get, set, remove, onValue } from "firebase/database";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 /* ------------------------------------------------------------------ */
@@ -121,6 +121,25 @@ async function sDel(key) {
     console.error("[Firebase] 刪除失敗", key, e.code || e.message);
     return false;
   }
+}
+
+/* 即時監聽單一 key。資料一變動就呼叫 cb，不必等輪詢。
+   回傳解除監聽的函式，呼叫端的 useEffect cleanup 必須呼叫它。 */
+function sWatch(key, cb) {
+  let off = () => {};
+  let cancelled = false;
+  authReady.then(() => {
+    if (cancelled) return;
+    off = onValue(
+      ref(db, "wushu_data/" + key),
+      (snap) => cb(snap.exists() ? snap.val() : null),
+      (e) => console.error("[Firebase] 監聽失敗", key, e.code || e.message)
+    );
+  });
+  return () => {
+    cancelled = true;
+    off();
+  };
 }
 const getJSON = async (key, fallback) => {
   const v = await sGet(key);
@@ -1743,10 +1762,26 @@ function MonitorTab({ groupKeys, groupsMeta, venuesConfig, athletes }) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  /* 選定單一項目時改用即時監聽（分數一寫入就更新）。
+     「全部顯示」維持輪詢：全部監聽會需要 組數×(裁判數+1) 個常駐監聽器，
+     54 組時就是 200 個以上，手機負擔太大。 */
   useEffect(() => {
-    const t = setInterval(refresh, 8000);
-    return () => clearInterval(t);
-  }, [refresh]);
+    if (!gk) {
+      const t = setInterval(refresh, 8000);
+      return () => clearInterval(t);
+    }
+    const meta = groupsMeta[gk];
+    const venue = meta && venuesConfig.venues.find((v) => v.id === meta.venueId);
+    if (!venue) return;
+
+    const keys = [
+      ...venue.judges.map((j) => `score:${gk}:${j.id}`),
+      `bonus:${gk}`,
+    ];
+    const unsubs = keys.map((k) => sWatch(k, () => refresh()));
+    return () => unsubs.forEach((off) => off());
+  }, [gk, groupsMeta, venuesConfig, refresh]);
 
   const activeKeys = gk ? [gk] : groupKeys;
   const anyMeeting = Object.values(groupResultsMap).some((item) =>
@@ -2074,15 +2109,15 @@ function JudgePortal({ onBack }) {
 
   useEffect(() => {
     (async () => {
-      const [v, g, a] = await Promise.all([
+      const [v, a] = await Promise.all([
         getJSON("venues-config", { scaleMax: 10, venues: [] }),
-        getJSON("groups-meta", {}),
         getJSON("athletes", []),
       ]);
       setVenuesConfig(v);
-      setGroupsMeta(g);
       setAthletes(a);
     })();
+    /* 項目開關由管理端控制，必須即時收到，否則裁判要重新整理才看得到 */
+    return sWatch("groups-meta", (v) => setGroupsMeta(v || {}));
   }, []);
 
   if (!venuesConfig)
