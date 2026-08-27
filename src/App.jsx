@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, get, set, remove } from "firebase/database";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 /* ------------------------------------------------------------------ */
 /* Firebase Cloud Configuration & Initialization                      */
@@ -44,6 +45,21 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+const auth = getAuth(app);
+
+/* 匿名登入。資料庫規則要求 auth != null，所以每次讀寫前都必須先等這個
+   完成，否則會被拒絕。失敗時記錄原因，方便判斷是否為 Console 未啟用。 */
+let authError = null;
+const authReady = new Promise((resolve) => {
+  onAuthStateChanged(auth, (user) => {
+    if (user) resolve(user);
+  });
+  signInAnonymously(auth).catch((e) => {
+    authError = e;
+    console.error("[Firebase] 匿名登入失敗：", e.code, e.message);
+    resolve(null);
+  });
+});
 
 /* ------------------------------------------------------------------ */
 /* Design tokens                                                      */
@@ -78,25 +94,31 @@ const FONT_MONO = "'JetBrains Mono', 'Roboto Mono', monospace";
 /* ------------------------------------------------------------------ */
 async function sGet(key) {
   try {
+    await authReady;
     const snapshot = await get(ref(db, "wushu_data/" + key));
     return snapshot.exists() ? snapshot.val() : null;
   } catch (e) {
+    console.error("[Firebase] 讀取失敗", key, e.code || e.message);
     return null;
   }
 }
 async function sSet(key, value) {
   try {
+    await authReady;
     await set(ref(db, "wushu_data/" + key), value);
     return true;
   } catch (e) {
+    console.error("[Firebase] 寫入失敗", key, e.code || e.message);
     return false;
   }
 }
 async function sDel(key) {
   try {
+    await authReady;
     await remove(ref(db, "wushu_data/" + key));
     return true;
   } catch (e) {
+    console.error("[Firebase] 刪除失敗", key, e.code || e.message);
     return false;
   }
 }
@@ -105,6 +127,22 @@ const getJSON = async (key, fallback) => {
   return v !== null ? v : fallback;
 };
 const setJSON = (key, obj) => sSet(key, obj);
+
+/* ------------------------------------------------------------------ */
+/* Admin password (存在雲端，不再寫死在前端)                            */
+/* ------------------------------------------------------------------ */
+const DEFAULT_ADMIN_PW = "8888";
+
+/* 首次執行時資料庫還沒有密碼，就用預設值建立，避免鎖住自己。
+   之後改密碼只要改資料庫的 admin-config/password，不用重新部署。 */
+async function verifyAdminPassword(input) {
+  const cfg = await sGet("admin-config");
+  if (cfg === null) {
+    await sSet("admin-config", { password: DEFAULT_ADMIN_PW });
+    return input === DEFAULT_ADMIN_PW;
+  }
+  return input === cfg.password;
+}
 
 /* ------------------------------------------------------------------ */
 /* Domain helpers                                                     */
@@ -576,6 +614,7 @@ function Landing({ onPick }) {
   const [showAdminAuth, setShowAdminAuth] = useState(false);
   const [pwd, setPwd] = useState("");
   const [err, setErr] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   const handleAdminClick = () => {
     setShowAdminAuth(true);
@@ -583,9 +622,13 @@ function Landing({ onPick }) {
     setErr(false);
   };
 
-  const verifyAdmin = (e) => {
+  const verifyAdmin = async (e) => {
     e.preventDefault();
-    if (pwd === "8888") {
+    setChecking(true);
+    setErr(false);
+    const ok = await verifyAdminPassword(pwd);
+    setChecking(false);
+    if (ok) {
       onPick("admin");
     } else {
       setErr(true);
@@ -794,9 +837,10 @@ function Landing({ onPick }) {
                 <Btn
                   variant="primary"
                   type="submit"
+                  disabled={checking}
                   style={{ flex: 1, justifyContent: "center" }}
                 >
-                  確認進入
+                  {checking ? "驗證中…" : "確認進入"}
                 </Btn>
               </div>
             </form>

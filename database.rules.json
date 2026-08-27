@@ -1,6 +1,8 @@
 {
   "rules": {
-    ".read": true,
-    ".write": true
+    "wushu_data": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    }
   }
 }
