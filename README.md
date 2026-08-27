@@ -1,0 +1,134 @@
+# 擂台記分 · 武術比賽評審系統
+
+多裁判即時評分系統。裁判各自在自己的裝置上打分，分數即時同步到雲端，管理端可即時監看、計算排名。
+
+**線上網址**：https://system-competition.vercel.app
+
+---
+
+## 快速上手
+
+| 我要… | 怎麼做 |
+|---|---|
+| 開始一場比賽 | 總控台 → 名單匯入 → 場地與裁判 → 項目控制（開啟項目） |
+| 讓裁判打分 | 裁判把網址開起來 → 裁判入口 → 選場地與身分 → 打分 |
+| 看即時進度 | 總控台 → 即時監看 |
+| 看排名 | 總控台 → 排名結果 |
+| 改管理端密碼 | 見下方「管理端密碼」 |
+
+---
+
+## 三個入口
+
+- **總控台** — 需密碼。名單匯入、場地與裁判、項目控制、即時監看、排名結果、最佳運動員
+- **裁判入口** — 免密碼。選場地與身分後打分；裁判長在此輸入加分
+- **成績看板** — 即時排名顯示，適合投影
+
+---
+
+## 名單匯入格式
+
+每行一位選手，用 **Tab、逗號或空白**分隔，至少 5 欄：
+
+```
+組別    項目            性別    中文姓名    英文姓名
+U10    传统太极长器械    男子组   陳小明      Chen Xiao Ming
+```
+
+英文姓名可含空白（第 5 欄之後會自動合併）。含「姓名 / 项目 / 组别」等字樣的標題行會自動略過。
+
+---
+
+## 計分規則
+
+實作於 [`computeGroupResults`](src/App.jsx)。
+
+**平均分**（需全部裁判都送出才計算）
+- **3 位裁判**：三個分數直接平均
+- **5 位裁判**：去掉最高與最低，取中間三個平均
+
+**最終分** = 平均分 + 裁判長加分，四捨五入至小數點 3 位
+
+**評審會議提示**：任兩位裁判分差 > 0.5 時，畫面會提示建議召開評審會議
+
+**排名**：同分並列，並列後跳號（1, 2, 2, 4）
+
+---
+
+## 管理端密碼
+
+預設 `8888`。密碼存在雲端，**改密碼不需要重新部署**：
+
+Firebase Console → Realtime Database → 資料 → `wushu_data/admin-config/password` → 直接改值
+
+> 首次執行時若資料庫沒有這筆記錄，系統會自動用預設值建立。
+
+---
+
+## 開發
+
+```bash
+npm install
+npm start      # 本機開發 http://localhost:3000
+npm run build  # 產生正式版
+```
+
+推送到 `main` 分支後，Vercel 會自動部署。
+
+**技術棧**：Create React App · Firebase Realtime Database · lucide-react
+**主要程式碼**：[`src/App.jsx`](src/App.jsx)（單一檔案）
+
+---
+
+## 資料與安全
+
+資料存在 Firebase Realtime Database 的 `wushu_data/` 底下：
+
+| Key | 內容 |
+|---|---|
+| `athletes` | 選手名單 |
+| `venues-config` | 場地、裁判、滿分設定 |
+| `groups-meta` | 項目（分組）狀態 |
+| `score:<項目>:<裁判id>` | 各裁判的評分 |
+| `bonus:<項目>` | 裁判長加分 |
+| `admin-config` | 管理端密碼 |
+
+**存取規則**（[`database.rules.json`](database.rules.json)）要求 `auth != null`。App 啟動時自動匿名登入，裁判不需要額外輸入任何東西。
+
+⚠️ **這層防護的界線**：它擋掉「繞過網站直接打資料庫改分數」，但**擋不住透過網站進來的人** — 任何人開啟網址都會自動取得匿名帳號，因而能夠打分。若日後需要更嚴格的控管，需改為真正的帳號密碼登入。
+
+修改規則後需在 Firebase Console → Realtime Database → 規則 手動發布（不會隨 git 自動套用）。
+
+---
+
+## 備份與還原
+
+`backup/` 存有資料庫匯出檔。還原：
+
+```bash
+bash backup/restore.sh backup/firebase-full-<timestamp>.json
+```
+
+> 還原需要寫入權限。若規則為 `auth != null`，須先在 Console 暫時改回全開放。
+
+建議在大型異動（清空名單、改規則）前先手動匯出一份：
+
+```bash
+curl "https://wushu-competition-system-default-rtdb.asia-southeast1.firebasedatabase.app/.json?auth=<TOKEN>" \
+  -o backup/firebase-full-$(date +%Y%m%d-%H%M%S).json
+```
+
+---
+
+## 疑難排解
+
+**看不到資料 / 名單空白**
+開瀏覽器 Console（F12）看有沒有 `[Firebase] 讀取失敗`。常見原因：
+- 匿名登入被關閉 → Console → Authentication → 登入方法 → 啟用「匿名」
+- 網域未授權 → Console → Authentication → 設定 → 已授權的網域，需含部署網址
+
+**分數沒有同步到其他裝置**
+確認網址是線上版而非本機版。資料同步靠 Firebase，各裝置需連得上網路。
+
+**排名沒出現 / 顯示未完成**
+平均分需**全部裁判都送出**才會計算。到「即時監看」看 `已送出/總數`。
