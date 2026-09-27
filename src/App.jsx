@@ -30,6 +30,8 @@ import {
   SkipForward,
   Undo2,
   Zap,
+  Tv,
+  Maximize,
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import {
@@ -834,6 +836,13 @@ function Landing({ onPick }) {
             desc: "即時排名顯示",
             icon: Radio,
             onClick: () => onPick("board"),
+          },
+          {
+            role: "display",
+            label: "個人成績版",
+            desc: "每個場地一面 · 跟隨場上選手",
+            icon: Tv,
+            onClick: () => onPick("display"),
           },
         ].map((o) => (
           <button
@@ -3007,17 +3016,57 @@ function ResultsTable({ results, venue, scaleMax }) {
           {results.map((r) => (
             <tr
               key={r.athlete.id}
-              style={{ borderBottom: `1px solid ${C.border}` }}
+              style={{
+                borderBottom: `1px solid ${C.border}`,
+                /* 分差超過 0.5 整列標紅，裁判長一眼就找得到要開會的選手 */
+                background: r.needsMeeting ? "#3A1A14" : undefined,
+                boxShadow: r.needsMeeting ? `inset 3px 0 0 ${C.red}` : undefined,
+              }}
             >
               <td style={td}>{r.athlete.order}</td>
               <td style={{ ...td, textAlign: "left" }}>
-                <div style={{ color: C.text }}>{r.athlete.cnName}</div>
+                <div
+                  style={{
+                    color: r.needsMeeting ? "#F0A08C" : C.text,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  {r.needsMeeting && (
+                    <span
+                      style={{
+                        background: C.red,
+                        color: "#fff",
+                        borderRadius: 999,
+                        width: 16,
+                        height: 16,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        flexShrink: 0,
+                      }}
+                    >
+                      !
+                    </span>
+                  )}
+                  {r.athlete.cnName}
+                </div>
                 <div style={{ color: C.textFaint, fontSize: 11 }}>
                   {r.athlete.enName}
                 </div>
               </td>
               {r.scores.map((s) => (
-                <td key={s.judgeId} style={{ ...td, fontFamily: FONT_MONO }}>
+                <td
+                  key={s.judgeId}
+                  style={{
+                    ...td,
+                    fontFamily: FONT_MONO,
+                    color: r.needsMeeting ? "#F0A08C" : td.color,
+                  }}
+                >
                   {s.value === null ? "—" : s.value.toFixed(2)}
                 </td>
               ))}
@@ -3770,6 +3819,324 @@ function ScoreEntry({
 }
 
 /* ------------------------------------------------------------------ */
+/* Venue display（個人成績版：每個場地一面，給在場觀眾看）              */
+/* ------------------------------------------------------------------ */
+const DISPLAY_HASH = /^#display\/(.+)$/;
+
+function DisplayPicker({ onPick, onBack }) {
+  const [venuesConfig, setVenuesConfig] = useState(null);
+  useEffect(
+    () => sWatch("venues-config", (v) => setVenuesConfig(v || { venues: [] })),
+    []
+  );
+
+  return (
+    <div style={{ minHeight: "100vh" }}>
+      <TopBar title="個人成績版" onBack={onBack} />
+      <div style={{ padding: 20, maxWidth: 420, margin: "0 auto" }}>
+        <SectionTitle eyebrow="Display" title="選擇場地" icon={Tv} />
+        {!venuesConfig ? (
+          <Loading />
+        ) : venuesConfig.venues.length === 0 ? (
+          <div style={{ color: C.textFaint, fontSize: 13 }}>
+            總控台尚未設定場地
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {venuesConfig.venues.map((v) => (
+              <Btn
+                key={v.id}
+                onClick={() => onPick(v.id)}
+                style={{ justifyContent: "center", padding: "14px 16px" }}
+              >
+                {v.name}
+              </Btn>
+            ))}
+            <div style={{ color: C.textFaint, fontSize: 12, marginTop: 6 }}>
+              每個場地開一台螢幕。網址會記住場地，重新整理不必再選。
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* 場上目前的項目：場地佇列首位且已開啟。場地沒有開啟中的項目時（全部跑完、
+   或總控台還沒按開始），退回最近完成的項目，讓畫面停在最後一位的成績。 */
+function displayGroupOf(venueId, groupsMeta, queues) {
+  const q = venueQueue(queues, venueId);
+  const head = q.order[0];
+  if (head && groupsMeta[head]?.open) return head;
+  const open = Object.keys(groupsMeta).find(
+    (k) => groupsMeta[k].venueId === venueId && groupsMeta[k].open
+  );
+  return open || q.done[0] || "";
+}
+
+function VenueDisplay({ venueId, onBack }) {
+  const [venuesConfig, setVenuesConfig] = useState(null);
+  const [athletes, setAthletes] = useState([]);
+  const [groupsMeta, setGroupsMeta] = useState({});
+  const [queues, setQueues] = useState({});
+  /* 目前顯示的選手。只在「有新的選手成績確定」時才換，所以項目切換到下一組
+     、下一位還沒評完之前，畫面會停在上一位的成績。 */
+  const [shown, setShown] = useState(null);
+
+  useEffect(() => {
+    const offs = [
+      sWatch("venues-config", (v) => setVenuesConfig(v || { venues: [] })),
+      sWatch("athletes", (v) => setAthletes(v || [])),
+      sWatch("groups-meta", (v) => setGroupsMeta(v || {})),
+      sWatch("queues", (v) => setQueues(v || {})),
+    ];
+    return () => offs.forEach((off) => off());
+  }, []);
+
+  const venue = venuesConfig?.venues.find((v) => v.id === venueId);
+  const gk = venue ? displayGroupOf(venueId, groupsMeta, queues) : "";
+
+  const metaRef = useRef(groupsMeta);
+  metaRef.current = groupsMeta;
+
+  useEffect(() => {
+    if (!venue || !gk) return;
+    let active = true;
+    const check = async () => {
+      const meta = metaRef.current[gk];
+      if (!meta) return;
+      const results = await computeGroupResults(gk, meta, venue, athletes);
+      if (!active || !results) return;
+      /* 「成績確定」＝全部裁判分數與裁判長加分都到齊，跟自動接續同一標準。
+         取出場順序最後的一位：前面的選手事後改分，畫面不會倒退回去。
+         分差超過 0.5 要先開評審會議，改完分之前畫面停在上一位不跳。 */
+      const done = results.filter(
+        (r) => r.complete && typeof r.bonus === "number"
+      );
+      const latest = done[done.length - 1];
+      if (latest && !latest.needsMeeting) setShown({ gk, meta, result: latest });
+    };
+    check();
+    const offs = [
+      ...venue.judges.map((j) => sWatch(`score:${gk}:${j.id}`, check)),
+      sWatch(`bonus:${gk}`, check),
+    ];
+    return () => {
+      active = false;
+      offs.forEach((off) => off());
+    };
+  }, [gk, venue, athletes]);
+
+  const goFullscreen = () => {
+    const el = document.documentElement;
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else el.requestFullscreen?.().catch(() => {});
+  };
+
+  if (!venuesConfig) return <Loading />;
+  if (!venue)
+    return (
+      <div style={{ minHeight: "100vh" }}>
+        <TopBar title="個人成績版" onBack={onBack} />
+        <div style={{ padding: 20, color: C.textFaint, textAlign: "center" }}>
+          找不到這個場地，可能已被刪除
+        </div>
+      </div>
+    );
+
+  const r = shown?.result;
+  const meta = shown?.meta;
+  /* 5 位裁判時去掉最高與最低各一個，畫面上淡化它們，觀眾看得出哪三個被採計。 */
+  const dropped = new Set();
+  if (r && venue.judgeCount === 5) {
+    const idx = r.scores
+      .map((s, i) => ({ v: s.value, i }))
+      .sort((a, b) => a.v - b.v);
+    dropped.add(idx[0].i);
+    dropped.add(idx[idx.length - 1].i);
+  }
+
+  const iconBtn = {
+    background: "none",
+    border: "none",
+    color: C.textFaint,
+    cursor: "pointer",
+    padding: 8,
+    display: "flex",
+  };
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        padding: "clamp(16px, 3vw, 48px)",
+        gap: "clamp(16px, 3vh, 40px)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <button onClick={onBack} style={iconBtn} aria-label="返回">
+          <ChevronLeft size={20} />
+        </button>
+        <div
+          style={{
+            flex: 1,
+            textAlign: "center",
+            fontFamily: FONT_DISPLAY,
+            fontSize: "clamp(28px, 5vw, 64px)",
+            fontWeight: 600,
+            color: C.gold,
+            letterSpacing: 2,
+          }}
+        >
+          {venue.name}
+        </div>
+        <button onClick={goFullscreen} style={iconBtn} aria-label="全螢幕">
+          <Maximize size={20} />
+        </button>
+      </div>
+
+      {!r ? (
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: C.textFaint,
+            fontSize: "clamp(18px, 3vw, 32px)",
+          }}
+        >
+          等待成績…
+        </div>
+      ) : (
+        <>
+          <div style={{ textAlign: "left" }}>
+            <div
+              style={{
+                color: C.textMuted,
+                fontSize: "clamp(16px, 2.2vw, 28px)",
+                marginBottom: 8,
+              }}
+            >
+              {meta.ageGroup} · {meta.eventName} · {meta.gender}
+            </div>
+            <div
+              style={{
+                fontSize: "clamp(40px, 8vw, 112px)",
+                fontWeight: 700,
+                color: C.text,
+                lineHeight: 1.1,
+              }}
+            >
+              {r.athlete.cnName}
+            </div>
+            <div
+              style={{
+                color: C.textMuted,
+                fontSize: "clamp(18px, 2.6vw, 36px)",
+                marginTop: 4,
+              }}
+            >
+              {r.athlete.enName}
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: `repeat(auto-fit, minmax(140px, 1fr))`,
+              gap: "clamp(10px, 1.5vw, 20px)",
+            }}
+          >
+            {r.scores.map((s, i) => (
+              <div
+                key={s.judgeId}
+                style={{
+                  padding: "clamp(8px, 1.5vw, 16px) 0",
+                  textAlign: "center",
+                  opacity: dropped.has(i) ? 0.4 : 1,
+                }}
+              >
+                <div
+                  style={{
+                    color: C.textFaint,
+                    fontSize: "clamp(13px, 1.6vw, 20px)",
+                    marginBottom: 6,
+                  }}
+                >
+                  {s.judgeName}
+                </div>
+                <span
+                  style={{
+                    textDecoration: dropped.has(i) ? "line-through" : "none",
+                  }}
+                >
+                  <ScoreDigits value={s.value} size="clamp(28px, 4.5vw, 64px)" />
+                </span>
+              </div>
+            ))}
+            {r.bonus > 0 && (
+              <div
+                style={{
+                  padding: "clamp(8px, 1.5vw, 16px) 0",
+                  textAlign: "center",
+                }}
+              >
+                <div
+                  style={{
+                    color: C.goldDim,
+                    fontSize: "clamp(13px, 1.6vw, 20px)",
+                    marginBottom: 6,
+                  }}
+                >
+                  裁判長加分
+                </div>
+                <ScoreDigits
+                  value={r.bonus}
+                  size="clamp(28px, 4.5vw, 64px)"
+                  color={C.gold}
+                />
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              marginTop: "auto",
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "flex-end",
+              gap: 20,
+              flexWrap: "wrap",
+              borderTop: `1px solid ${C.border}`,
+              paddingTop: "clamp(12px, 2vh, 24px)",
+            }}
+          >
+            <span
+              style={{
+                fontFamily: FONT_DISPLAY,
+                color: C.textMuted,
+                fontSize: "clamp(20px, 3vw, 40px)",
+                letterSpacing: 2,
+              }}
+            >
+              最終得分
+            </span>
+            <ScoreDigits
+              value={r.final}
+              size="clamp(64px, 12vw, 180px)"
+              color={C.gold}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Board (public leaderboard)                                         */
 /* ------------------------------------------------------------------ */
 function BoardView({ onBack }) {
@@ -3942,7 +4309,25 @@ function BoardView({ onBack }) {
 /* ------------------------------------------------------------------ */
 export default function App() {
   useFonts();
-  const [role, setRole] = useState(null);
+  /* 個人成績版的場地放在網址 hash，場邊螢幕重新整理或斷電重開都會回到同一面。 */
+  const [displayVenue, setDisplayVenue] = useState(
+    () => (window.location.hash.match(DISPLAY_HASH) || [])[1] || null
+  );
+  const [role, setRole] = useState(() => (displayVenue ? "display" : null));
+
+  const pickDisplayVenue = (vid) => {
+    const { pathname, search } = window.location;
+    window.history.replaceState(
+      null,
+      "",
+      vid ? `#display/${vid}` : pathname + search
+    );
+    setDisplayVenue(vid);
+  };
+  const leaveDisplay = () => {
+    pickDisplayVenue(null);
+    setRole(null);
+  };
 
   return (
     <div
@@ -3969,6 +4354,15 @@ export default function App() {
       {role === "admin" && <AdminConsole onBack={() => setRole(null)} />}
       {role === "judge" && <JudgePortal onBack={() => setRole(null)} />}
       {role === "board" && <BoardView onBack={() => setRole(null)} />}
+      {role === "display" && !displayVenue && (
+        <DisplayPicker onPick={pickDisplayVenue} onBack={leaveDisplay} />
+      )}
+      {role === "display" && displayVenue && (
+        <VenueDisplay
+          venueId={displayVenue}
+          onBack={() => pickDisplayVenue(null)}
+        />
+      )}
     </div>
   );
 }
