@@ -3967,11 +3967,13 @@ function VenueDisplay({ venueId, onBack }) {
 
   return (
     <div
+      className="screen-h"
       style={{
-        minHeight: "100vh",
         display: "flex",
         flexDirection: "column",
         padding: "clamp(16px, 3vw, 48px)",
+        paddingBottom:
+          "calc(clamp(16px, 3vw, 48px) + env(safe-area-inset-bottom, 0px))",
         gap: "clamp(16px, 3vh, 40px)",
       }}
     >
@@ -4344,6 +4346,11 @@ export default function App() {
         @keyframes spin { from { transform: rotate(0deg);} to { transform: rotate(360deg);} }
         .spin { animation: spin 1s linear infinite; }
         * { box-sizing: border-box; }
+        /* 瀏覽器預設 body 有 8px 白色外距，手機上會看到白邊 */
+        html, body { margin: 0; background: ${C.bg}; }
+        /* 手機的 100vh 會算進網址列底下的高度，底部內容會被切掉；
+           支援 dvh 的瀏覽器改用實際可見高度 */
+        .screen-h { min-height: 100vh; min-height: 100dvh; }
         .qcol::-webkit-scrollbar { width: 6px; }
         .qcol::-webkit-scrollbar-thumb { background: ${C.border}; border-radius: 3px; }
         .qboard { touch-action: pan-y; }
