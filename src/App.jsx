@@ -1202,46 +1202,72 @@ function RosterTab({ athletes, groupsMeta, reload }) {
       setBusy(false);
       return;
     }
-    const withIds = parsed.map((a) => ({ ...a, id: genId() }));
+    /* 追加匯入：原有選手（id、出場序、分數）完全不動，新選手接在同組最後。
+       直接讀雲端最新名單而不是用 props，避免另一台裝置剛匯入的被蓋掉。 */
+    const [existing, existingMeta] = await Promise.all([
+      getJSON("athletes", []),
+      getJSON("groups-meta", {}),
+    ]);
+    /* 同組同名（中英文都相同）視為同一人，重複貼上不會多出一個人。 */
+    const personKey = (a) => `${groupKeyOf(a)}__${a.cnName}__${a.enName}`;
+    const seen = new Set(existing.map(personKey));
+    const fresh = [];
+    let skipped = 0;
+    for (const a of parsed) {
+      const pk = personKey(a);
+      if (seen.has(pk)) {
+        skipped++;
+        continue;
+      }
+      seen.add(pk);
+      fresh.push({ ...a, id: genId() });
+    }
+    if (fresh.length === 0) {
+      setMsg(`沒有新選手：${skipped} 位已在名單中`);
+      setBusy(false);
+      return;
+    }
+
     const byGroup = {};
-    withIds.forEach((a) => {
+    fresh.forEach((a) => {
       const k = groupKeyOf(a);
       (byGroup[k] = byGroup[k] || []).push(a);
     });
+    const metaPatch = {};
     Object.keys(byGroup).forEach((k) => {
+      const inGroup = existing.filter((a) => groupKeyOf(a) === k);
+      const base = inGroup.reduce((m, a) => Math.max(m, a.order || 0), 0);
+      /* 只打亂新加入的這批，原有選手的出場序保留 */
       const shuffled = shuffle(byGroup[k]);
       shuffled.forEach((a, idx) => {
-        a.order = idx + 1;
+        a.order = base + idx + 1;
       });
-      byGroup[k] = shuffled;
+      const ids = [...inGroup, ...shuffled].map((a) => a.id);
+      if (existingMeta[k]) {
+        /* 只改 athleteIds，場地、開啟狀態等設定不碰 */
+        metaPatch[`${k}/athleteIds`] = ids;
+      } else {
+        const sample = shuffled[0];
+        metaPatch[k] = {
+          ageGroup: sample.ageGroup,
+          eventName: sample.eventName,
+          gender: sample.gender,
+          venueId: null,
+          open: false,
+          athleteIds: ids,
+        };
+      }
     });
-    const finalList = Object.values(byGroup).flat();
+    const finalList = [...existing, ...Object.values(byGroup).flat()];
     await setJSON("athletes", finalList);
-
-    const existingMeta = await getJSON("groups-meta", {});
-    const newMeta = {};
-    Object.keys(byGroup).forEach((k) => {
-      const sample = byGroup[k][0];
-      newMeta[k] = existingMeta[k]
-        ? { ...existingMeta[k] }
-        : {
-            ageGroup: sample.ageGroup,
-            eventName: sample.eventName,
-            gender: sample.gender,
-            venueId: null,
-            open: false,
-          };
-      newMeta[k].ageGroup = sample.ageGroup;
-      newMeta[k].eventName = sample.eventName;
-      newMeta[k].gender = sample.gender;
-      newMeta[k].athleteIds = byGroup[k].map((a) => a.id);
-    });
-    await setJSON("groups-meta", newMeta);
+    await sUpdate("groups-meta", metaPatch);
     setBusy(false);
+    const newGroups = Object.keys(byGroup).filter((k) => !existingMeta[k]);
     setMsg(
-      `匯入成功：共 ${finalList.length} 位選手，${
-        Object.keys(byGroup).length
-      } 個項目組別（組內已隨機打亂順序）`
+      `匯入成功：新增 ${fresh.length} 位選手` +
+        (newGroups.length ? `、${newGroups.length} 個新項目組別` : "") +
+        (skipped ? `，${skipped} 位已在名單中略過` : "") +
+        `。目前共 ${finalList.length} 位（新選手接在同組最後，隨機排序）`
     );
     setText("");
     reload();
@@ -1310,7 +1336,7 @@ function RosterTab({ athletes, groupsMeta, reload }) {
             onClick={doImport}
             disabled={busy || !text.trim()}
           >
-            <Shuffle size={15} /> 匯入並隨機打亂同組順序
+            <Shuffle size={15} /> 加入名單（新選手隨機排序）
           </Btn>
           <Btn variant="danger" onClick={() => setConfirmOpen(true)}>
             <Trash2 size={14} /> 清空名單
