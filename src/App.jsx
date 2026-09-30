@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   Users,
   Settings,
@@ -32,6 +32,7 @@ import {
   Zap,
   Tv,
   Maximize,
+  Download,
 } from "lucide-react";
 import { initializeApp } from "firebase/app";
 import {
@@ -1088,7 +1089,9 @@ function AdminConsole({ onBack }) {
     enabled: !loading,
   });
 
-  const groupKeys = Object.keys(groupsMeta);
+  /* 記住陣列本身：引擎的 headStatus 每次有人打分都會讓總控台重繪，每次
+     都給新陣列的話，即時監看與排名結果會把全部項目重抓一遍。 */
+  const groupKeys = useMemo(() => Object.keys(groupsMeta), [groupsMeta]);
 
   return (
     <div style={{ minHeight: "100vh" }}>
@@ -1987,6 +1990,10 @@ function useQueueEngine({ groupsMeta, setGroupsMeta, venuesConfig, athletes, ena
           patch[`${vid}/order`] = r.queues[vid].order;
           patch[`${vid}/done`] = r.queues[vid].done;
           patch[`${vid}/auto`] = !!r.queues[vid].auto;
+        }
+        /* 已刪除場地的佇列節點一併移除，否則每次載入都判定「有變」再寫一輪 */
+        for (const vid of Object.keys(existing)) {
+          if (!r.queues[vid]) patch[vid] = null;
         }
         await sUpdate("queues", patch);
       }
@@ -3712,6 +3719,9 @@ function JudgeScoring({
             </Select>
             {gk && (
               <ScoreEntry
+                /* 換項目時整個重建：否則新項目的分數讀回來之前，畫面還是上一組
+                   的值，這時打字會把上一組的分數一起存進新項目 */
+                key={gk}
                 groupKey={gk}
                 meta={groupsMeta[gk]}
                 venue={venue}
@@ -3761,17 +3771,14 @@ function ScoreEntry({
 
   const onChangeVal = (athleteId, raw) => {
     const cleanDigits = raw.replace(/[^0-9]/g, "");
+    const next = { ...values };
     if (cleanDigits === "") {
-      const next = { ...values };
+      /* 清空也要存回雲端，否則畫面空了、雲端還留著舊分數，仍算已送出 */
       delete next[athleteId];
-      setValues(next);
-      return;
+    } else {
+      const num = parseInt(cleanDigits, 10) / 100;
+      next[athleteId] = num > scaleMax ? scaleMax : num;
     }
-
-    const num = parseInt(cleanDigits, 10) / 100;
-    const finalVal = num > scaleMax ? scaleMax : num;
-
-    const next = { ...values, [athleteId]: finalVal };
     setValues(next);
     setSaving((s) => ({ ...s, [athleteId]: "typing" }));
     clearTimeout(timers.current[athleteId]);
@@ -4182,6 +4189,70 @@ function VenueDisplay({ venueId, onBack }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Excel 匯出（成績看板）                                               */
+/* ------------------------------------------------------------------ */
+/* 版面照主辦方的模板：每個項目一行標題「U10 传统太极短兵器-女子」，底下每位
+   選手一行「名次 | 中文姓名 | 英文姓名 | 最終得分」，項目之間空一行。
+   還沒評完的選手也列出，排在最後、名次與分數留空。 */
+async function exportResultsXlsx(groupsMeta, venuesConfig, athletes) {
+  const XLSX = await import("xlsx");
+  const keys = Object.keys(groupsMeta).sort((a, b) => {
+    const s = (k) =>
+      `${groupsMeta[k].ageGroup}|${groupsMeta[k].eventName}|${groupsMeta[k].gender}`;
+    return s(a).localeCompare(s(b), "zh-Hant", { numeric: true });
+  });
+
+  const rows = [];
+  const scoreCells = [];
+  for (const k of keys) {
+    const meta = groupsMeta[k];
+    const venue = venuesConfig.venues.find((v) => v.id === meta.venueId);
+    const results = await computeGroupResults(k, meta, venue, athletes);
+    /* 還沒排進場地的項目算不出成績，只列出選手 */
+    const list =
+      results ||
+      athletes
+        .filter((a) => (meta.athleteIds || []).includes(a.id))
+        .sort((a, b) => a.order - b.order)
+        .map((a) => ({ athlete: a, final: null, rank: null }));
+    const done = list
+      .filter((r) => r.final !== null)
+      .sort((a, b) => a.rank - b.rank);
+    const pending = list.filter((r) => r.final === null);
+
+    if (rows.length) rows.push([]);
+    const gender = (meta.gender || "").replace(/[组組]$/, "");
+    rows.push([`${meta.ageGroup} ${meta.eventName}-${gender}`]);
+    for (const r of [...done, ...pending]) {
+      if (r.final !== null) scoreCells.push(rows.length);
+      rows.push([
+        r.rank ?? "",
+        r.athlete.cnName,
+        r.athlete.enName,
+        r.final ?? "",
+      ]);
+    }
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  /* 存真實分數（算到小數 3 位），只把顯示格式設成 2 位 */
+  for (const i of scoreCells) {
+    const cell = ws[XLSX.utils.encode_cell({ r: i, c: 3 })];
+    if (cell) cell.z = "0.00";
+  }
+  ws["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 26 }, { wch: 10 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "成績");
+
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(
+    d.getHours()
+  )}${p(d.getMinutes())}`;
+  XLSX.writeFile(wb, `成績_${stamp}.xlsx`);
+}
+
+/* ------------------------------------------------------------------ */
 /* Board (public leaderboard)                                         */
 /* ------------------------------------------------------------------ */
 function BoardView({ onBack }) {
@@ -4244,16 +4315,40 @@ function BoardView({ onBack }) {
       ? C.bronze
       : C.textMuted;
 
+  const [exporting, setExporting] = useState(false);
+  /* 匯出一律是全部項目，不跟下拉選單走；重讀最新分數而不是用看板的輪詢結果 */
+  const onExport = async () => {
+    setExporting(true);
+    try {
+      await exportResultsXlsx(groupsMeta, venuesConfig, athletes);
+    } catch (e) {
+      console.error("[匯出] 失敗", e);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div style={{ minHeight: "100vh" }}>
       <TopBar title="成績看板" onBack={onBack} />
       <div style={{ padding: 20, maxWidth: 600, margin: "0 auto" }}>
-        <GroupPicker
-          groupKeys={groupKeys}
-          groupsMeta={groupsMeta}
-          value={gk}
-          onChange={setGk}
-        />
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <GroupPicker
+              groupKeys={groupKeys}
+              groupsMeta={groupsMeta}
+              value={gk}
+              onChange={setGk}
+            />
+          </div>
+          <Btn
+            onClick={onExport}
+            disabled={exporting || groupKeys.length === 0}
+            style={{ whiteSpace: "nowrap", flexShrink: 0 }}
+          >
+            <Download size={15} /> {exporting ? "匯出中…" : "匯出 Excel"}
+          </Btn>
+        </div>
 
         <div
           style={{
