@@ -272,7 +272,14 @@ function parseRoster(text) {
   return out;
 }
 
-const groupKeyOf = (a) => `${a.ageGroup}__${a.eventName}__${a.gender}`;
+/* groupKey 會拿來當 Firebase 的 key（groups-meta/<gk>、score:<gk>:…），而
+   Firebase key 不能含 . # $ [ ] /。「推手（22.5kg）」的小數點會讓整份 groups-meta
+   寫入被拒，所以把這些字元編成 %XX。沒有這些字元的舊 key 完全不變。 */
+const groupKeyOf = (a) =>
+  `${a.ageGroup}__${a.eventName}__${a.gender}`.replace(
+    /[.#$[\]/%]/g,
+    (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")
+  );
 
 function shuffle(arr) {
   const a = [...arr];
@@ -295,6 +302,14 @@ function computeRanks(sortedDesc) {
     }
     return { ...it, rank };
   });
+}
+
+/* 評審會議的判定：已送出的裁判分數有兩個以上、最高減最低超過 0.5。
+   計分、即時監看、裁判長頁面都用這一個，標準才不會不一致。 */
+function judgeSpread(scores) {
+  if (scores.length < 2) return { diff: null, needsMeeting: false };
+  const diff = +(Math.max(...scores) - Math.min(...scores)).toFixed(3);
+  return { diff, needsMeeting: diff > 0.5 };
 }
 
 async function computeGroupResults(groupKey, meta, venue, athletesAll) {
@@ -324,11 +339,7 @@ async function computeGroupResults(groupKey, meta, venue, athletesAll) {
       diff = null,
       needsMeeting = false,
       final = null;
-    if (submittedCount >= 2) {
-      const sorted = [...scores].sort((x, y) => x - y);
-      diff = +(sorted[sorted.length - 1] - sorted[0]).toFixed(3);
-      needsMeeting = diff > 0.5;
-    }
+    ({ diff, needsMeeting } = judgeSpread(scores));
     if (submittedCount === venue.judgeCount) {
       const sorted = [...scores].sort((x, y) => x - y);
       if (venue.judgeCount === 5) {
@@ -1242,12 +1253,6 @@ function RosterTab({ athletes, groupsMeta, reload }) {
       seen.add(pk);
       fresh.push({ ...a, id: genId() });
     }
-    if (fresh.length === 0) {
-      setMsg(`沒有新選手：${skipped} 位已在名單中`);
-      setBusy(false);
-      return;
-    }
-
     const byGroup = {};
     fresh.forEach((a) => {
       const k = groupKeyOf(a);
@@ -1278,15 +1283,48 @@ function RosterTab({ athletes, groupsMeta, reload }) {
         };
       }
     });
+    /* 修復：名單裡有選手、groups-meta 卻沒有這組（之前寫入失敗留下的），
+       補建起來，否則項目控制看不到這些項目。 */
+    let repaired = 0;
+    const existingByGroup = {};
+    existing.forEach((a) => {
+      const k = groupKeyOf(a);
+      (existingByGroup[k] = existingByGroup[k] || []).push(a);
+    });
+    Object.entries(existingByGroup).forEach(([k, list]) => {
+      if (existingMeta[k] || byGroup[k]) return;
+      const sorted = [...list].sort((a, b) => a.order - b.order);
+      metaPatch[k] = {
+        ageGroup: sorted[0].ageGroup,
+        eventName: sorted[0].eventName,
+        gender: sorted[0].gender,
+        venueId: null,
+        open: false,
+        athleteIds: sorted.map((a) => a.id),
+      };
+      repaired++;
+    });
+
+    if (fresh.length === 0 && repaired === 0) {
+      setMsg(`沒有新選手：${skipped} 位已在名單中`);
+      setBusy(false);
+      return;
+    }
+
     const finalList = [...existing, ...Object.values(byGroup).flat()];
-    await setJSON("athletes", finalList);
-    await sUpdate("groups-meta", metaPatch);
+    const okAthletes = fresh.length ? await setJSON("athletes", finalList) : true;
+    const okMeta = okAthletes && (await sUpdate("groups-meta", metaPatch));
     setBusy(false);
+    if (!okAthletes || !okMeta) {
+      setMsg("儲存失敗，請檢查網路後再匯入一次（詳細原因見瀏覽器 Console）");
+      return;
+    }
     const newGroups = Object.keys(byGroup).filter((k) => !existingMeta[k]);
     setMsg(
-      `匯入成功：新增 ${fresh.length} 位選手` +
+      (fresh.length ? `匯入成功：新增 ${fresh.length} 位選手` : "匯入完成") +
         (newGroups.length ? `、${newGroups.length} 個新項目組別` : "") +
         (skipped ? `，${skipped} 位已在名單中略過` : "") +
+        (repaired ? `，修復 ${repaired} 個之前沒建好的項目` : "") +
         `。目前共 ${finalList.length} 位（新選手接在同組最後，隨機排序）`
     );
     setText("");
@@ -3764,10 +3802,34 @@ function ScoreEntry({
     };
   }, [storeKey]);
 
+  /* 裁判長即時看到每位裁判的分數，分差超過 0.5 馬上標紅，好及時召開評審
+     會議。一般裁判仍然看不到別人的分數。 */
+  const [judgeScores, setJudgeScores] = useState({});
+  useEffect(() => {
+    if (!isChief) return;
+    setJudgeScores({});
+    const offs = venue.judges.map((j) =>
+      sWatch(`score:${groupKey}:${j.id}`, (v) =>
+        setJudgeScores((prev) => ({ ...prev, [j.id]: v || {} }))
+      )
+    );
+    return () => offs.forEach((off) => off());
+  }, [isChief, groupKey, venue]);
+
   if (!meta) return null;
   const groupAthletes = athletes
     .filter((a) => meta.athleteIds?.includes(a.id))
     .sort((a, b) => a.order - b.order);
+
+  const spreadOf = (aid) =>
+    judgeSpread(
+      venue.judges
+        .map((j) => judgeScores[j.id]?.[aid])
+        .filter((v) => typeof v === "number")
+    );
+  const meetingNames = isChief
+    ? groupAthletes.filter((a) => spreadOf(a.id).needsMeeting).map((a) => a.cnName)
+    : [];
 
   const onChangeVal = (athleteId, raw) => {
     const cleanDigits = raw.replace(/[^0-9]/g, "");
@@ -3796,71 +3858,160 @@ function ScoreEntry({
           ? `裁判長加分（直接輸入數字自動帶入小數點，上限 ${scaleMax}）`
           : `評分（直接輸入數字自動帶入小數點，上限 ${scaleMax}）· 其他裁判分數保密`}
       </div>
+      {meetingNames.length > 0 && (
+        <Card
+          style={{
+            padding: 12,
+            borderColor: C.redDim,
+            background: "#2A1712",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+          }}
+        >
+          <AlertTriangle size={16} color="#F0A08C" style={{ flexShrink: 0 }} />
+          <span style={{ color: "#F0A08C", fontSize: 13 }}>
+            裁判分差超過 0.5，建議召開評審會議：{meetingNames.join("、")}
+          </span>
+        </Card>
+      )}
       {groupAthletes.map((a) => {
         const currentVal = values[a.id];
         const displayVal =
           currentVal !== undefined && currentVal !== null
             ? Number(currentVal).toFixed(2)
             : "";
+        const spread = isChief ? spreadOf(a.id) : null;
+        const meeting = !!spread?.needsMeeting;
 
         return (
           <Card
             key={a.id}
             style={{
               padding: "12px 14px",
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              borderStyle: "dashed",
-              borderColor: isChief ? C.goldDim : C.border,
+              borderStyle: meeting ? "solid" : "dashed",
+              borderColor: meeting ? C.red : isChief ? C.goldDim : C.border,
+              background: meeting ? "#3A1A14" : undefined,
             }}
           >
-            <div
-              style={{
-                fontFamily: FONT_MONO,
-                fontSize: 12,
-                color: C.textFaint,
-                background: C.bg,
-                border: `1px solid ${C.border}`,
-                borderRadius: 6,
-                padding: "3px 7px",
-                minWidth: 24,
-                textAlign: "center",
-              }}
-            >
-              {a.order}
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ color: C.text, fontSize: 14.5 }}>{a.cnName}</div>
-              <div style={{ color: C.textFaint, fontSize: 11.5 }}>
-                {a.enName}
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div
+                style={{
+                  fontFamily: FONT_MONO,
+                  fontSize: 12,
+                  color: C.textFaint,
+                  background: C.bg,
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 6,
+                  padding: "3px 7px",
+                  minWidth: 24,
+                  textAlign: "center",
+                }}
+              >
+                {a.order}
               </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: C.text, fontSize: 14.5 }}>{a.cnName}</div>
+                <div style={{ color: C.textFaint, fontSize: 11.5 }}>
+                  {a.enName}
+                </div>
+              </div>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={displayVal}
+                onChange={(e) => onChangeVal(a.id, e.target.value)}
+                placeholder="—"
+                style={{
+                  ...inputStyle,
+                  width: 92,
+                  textAlign: "center",
+                  fontFamily: FONT_MONO,
+                  fontSize: 18,
+                  fontWeight: 700,
+                  borderColor: isChief ? C.goldDim : C.border,
+                }}
+              />
+              <span
+                style={{
+                  fontSize: 10,
+                  width: 30,
+                  color: saving[a.id] === "saved" ? C.green : "transparent",
+                }}
+              >
+                已存
+              </span>
             </div>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={displayVal}
-              onChange={(e) => onChangeVal(a.id, e.target.value)}
-              placeholder="—"
-              style={{
-                ...inputStyle,
-                width: 92,
-                textAlign: "center",
-                fontFamily: FONT_MONO,
-                fontSize: 18,
-                fontWeight: 700,
-                borderColor: isChief ? C.goldDim : C.border,
-              }}
-            />
-            <span
-              style={{
-                fontSize: 10,
-                width: 30,
-                color: saving[a.id] === "saved" ? C.green : "transparent",
-              }}
-            >
-              已存
-            </span>
+            {isChief && (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: "4px 14px",
+                  marginTop: 8,
+                  paddingTop: 8,
+                  borderTop: `1px solid ${meeting ? C.redDim : C.border}`,
+                  fontSize: 12,
+                }}
+              >
+                {venue.judges.map((j) => {
+                  const v = judgeScores[j.id]?.[a.id];
+                  return (
+                    <span key={j.id} style={{ color: C.textFaint }}>
+                      {j.name}{" "}
+                      <span
+                        style={{
+                          fontFamily: FONT_MONO,
+                          fontWeight: 700,
+                          color:
+                            typeof v !== "number"
+                              ? C.textFaint
+                              : meeting
+                              ? "#F0A08C"
+                              : C.text,
+                        }}
+                      >
+                        {typeof v === "number" ? v.toFixed(2) : "—"}
+                      </span>
+                    </span>
+                  );
+                })}
+                {spread.diff !== null && (
+                  <span
+                    style={{
+                      marginLeft: "auto",
+                      color: meeting ? "#F0A08C" : C.textFaint,
+                      fontWeight: meeting ? 700 : 400,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                    }}
+                  >
+                    {meeting && (
+                      <span
+                        style={{
+                          background: C.red,
+                          color: "#fff",
+                          borderRadius: 999,
+                          width: 16,
+                          height: 16,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        !
+                      </span>
+                    )}
+                    分差 {spread.diff.toFixed(2)}
+                    {meeting && " · 需開會"}
+                  </span>
+                )}
+              </div>
+            )}
           </Card>
         );
       })}
@@ -4191,6 +4342,32 @@ function VenueDisplay({ venueId, onBack }) {
 /* ------------------------------------------------------------------ */
 /* Excel 匯出（成績看板）                                               */
 /* ------------------------------------------------------------------ */
+/* 獎牌名額：有成績的選手每人一面，金 20%、銀 40%、銅 40%。先分整數部分，
+   剩下的名額給小數最大的；小數相同時給較高的獎牌（4 人：0.8/1.6/1.6 →
+   1 金 2 銀 1 銅）。1、2 人的項目照比例會沒有金牌，主辦方規定第 1 名至少
+   拿金：1 人 → 1 金，2 人 → 1 金 1 銀。回傳依名次排好的獎牌陣列。 */
+const MEDALS = ["金", "银", "铜"];
+function medalsFor(n) {
+  if (n <= 0) return [];
+  const quota = [0.2, 0.4, 0.4].map((p) => p * n);
+  const count = quota.map(Math.floor);
+  let left = n - count.reduce((s, c) => s + c, 0);
+  const byRemainder = [0, 1, 2].sort(
+    (a, b) => quota[b] - count[b] - (quota[a] - count[a]) || a - b
+  );
+  for (const i of byRemainder) {
+    if (left <= 0) break;
+    count[i]++;
+    left--;
+  }
+  if (count[0] === 0) {
+    count[0] = 1;
+    if (count[2] > 0) count[2]--;
+    else count[1]--;
+  }
+  return count.flatMap((c, i) => Array(c).fill(MEDALS[i]));
+}
+
 /* 版面照主辦方的模板：每個項目一行標題「U10 传统太极短兵器-女子」，底下每位
    選手一行「名次 | 中文姓名 | 英文姓名 | 最終得分」，項目之間空一行。
    還沒評完的選手也列出，排在最後、名次與分數留空。 */
@@ -4223,13 +4400,16 @@ async function exportResultsXlsx(groupsMeta, venuesConfig, athletes) {
     if (rows.length) rows.push([]);
     const gender = (meta.gender || "").replace(/[组組]$/, "");
     rows.push([`${meta.ageGroup} ${meta.eventName}-${gender}`]);
-    for (const r of [...done, ...pending]) {
+    /* 同分並列時照排列順序給牌，不看名次 */
+    const medals = medalsFor(done.length);
+    for (const [i, r] of [...done, ...pending].entries()) {
       if (r.final !== null) scoreCells.push(rows.length);
       rows.push([
         r.rank ?? "",
         r.athlete.cnName,
         r.athlete.enName,
         r.final ?? "",
+        medals[i] ?? "",
       ]);
     }
   }
@@ -4240,9 +4420,45 @@ async function exportResultsXlsx(groupsMeta, venuesConfig, athletes) {
     const cell = ws[XLSX.utils.encode_cell({ r: i, c: 3 })];
     if (cell) cell.z = "0.00";
   }
-  ws["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 26 }, { wch: 10 }];
+  ws["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 6 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "成績");
+
+  /* 第二張工作表：最佳運動員，規則同總控台的「最佳運動員」分頁（參加 3 項
+     以上，已評項目的最終得分平均）。版面比照成績表：一行標題，底下
+     「名次 | 中文姓名 | 英文姓名 | 平均分 | 已評/報名項數」。 */
+  const best = await computeBestAthletes(groupsMeta, venuesConfig, athletes);
+  const bRows = [];
+  const bScoreCells = [];
+  for (const [label, list] of [
+    ["男子最佳運動員", best.male],
+    ["女子最佳運動員", best.female],
+  ]) {
+    if (bRows.length) bRows.push([]);
+    bRows.push([label]);
+    const scored = list.filter((s) => s.scoredCount > 0);
+    const unscored = list.filter((s) => s.scoredCount === 0);
+    let rank = 0;
+    let prev = null;
+    scored.forEach((s, i) => {
+      if (s.avg !== prev) {
+        rank = i + 1;
+        prev = s.avg;
+      }
+      bScoreCells.push(bRows.length);
+      bRows.push([rank, s.cnName, s.enName, s.avg, `${s.scoredCount}/${s.events.length} 項`]);
+    });
+    unscored.forEach((s) =>
+      bRows.push(["", s.cnName, s.enName, "", `0/${s.events.length} 項`])
+    );
+  }
+  const bws = XLSX.utils.aoa_to_sheet(bRows);
+  for (const i of bScoreCells) {
+    const cell = bws[XLSX.utils.encode_cell({ r: i, c: 3 })];
+    if (cell) cell.z = "0.00";
+  }
+  bws["!cols"] = [{ wch: 16 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }];
+  XLSX.utils.book_append_sheet(wb, bws, "最佳運動員");
 
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
