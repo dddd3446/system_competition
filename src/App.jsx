@@ -179,6 +179,23 @@ const getJSON = async (key, fallback) => {
 };
 const setJSON = (key, obj) => sSet(key, obj);
 
+/* RTDB 不存空陣列：場地全部刪掉後存進去的 venues: [] 會整個消失，讀回來
+   只剩 { scaleMax }，畫面一碰 .venues.map 就整頁白掉。所有讀取都經過這裡補回來。 */
+function normVenuesConfig(v) {
+  const cfg = v || {};
+  return {
+    ...cfg,
+    scaleMax: cfg.scaleMax ?? 10,
+    venues: (Array.isArray(cfg.venues) ? cfg.venues : []).map((venue) => ({
+      ...venue,
+      judges: Array.isArray(venue.judges) ? venue.judges : [],
+      chief: venue.chief || { id: genId(), name: "裁判長" },
+    })),
+  };
+}
+const loadVenuesConfig = async () =>
+  normVenuesConfig(await sGet("venues-config"));
+
 /* 多路徑原子更新。patch 的 key 可以含斜線（例如 "gkA/open"），Firebase 會
    把整份 patch 當成一次寫入送出，所以「關掉舊項目 + 開啟新項目」會在裁判端
    的 sWatch 同一個 callback 內出現，不會閃出兩個同時開或一個都沒開的狀態。
@@ -1050,7 +1067,7 @@ function AdminConsole({ onBack }) {
     const [a, g, v] = await Promise.all([
       getJSON("athletes", []),
       getJSON("groups-meta", {}),
-      getJSON("venues-config", { scaleMax: 10, venues: [] }),
+      loadVenuesConfig(),
     ]);
     setAthletes(a);
     setGroupsMeta(g);
@@ -3518,7 +3535,7 @@ function JudgePortal({ onBack }) {
   useEffect(() => {
     (async () => {
       const [v, a] = await Promise.all([
-        getJSON("venues-config", { scaleMax: 10, venues: [] }),
+        loadVenuesConfig(),
         getJSON("athletes", []),
       ]);
       setVenuesConfig(v);
@@ -3852,7 +3869,7 @@ const DISPLAY_HASH = /^#display\/(.+)$/;
 function DisplayPicker({ onPick, onBack }) {
   const [venuesConfig, setVenuesConfig] = useState(null);
   useEffect(
-    () => sWatch("venues-config", (v) => setVenuesConfig(v || { venues: [] })),
+    () => sWatch("venues-config", (v) => setVenuesConfig(normVenuesConfig(v))),
     []
   );
 
@@ -3911,7 +3928,7 @@ function VenueDisplay({ venueId, onBack }) {
 
   useEffect(() => {
     const offs = [
-      sWatch("venues-config", (v) => setVenuesConfig(v || { venues: [] })),
+      sWatch("venues-config", (v) => setVenuesConfig(normVenuesConfig(v))),
       sWatch("athletes", (v) => setAthletes(v || [])),
       sWatch("groups-meta", (v) => setGroupsMeta(v || {})),
       sWatch("queues", (v) => setQueues(v || {})),
@@ -4181,7 +4198,7 @@ function BoardView({ onBack }) {
     (async () => {
       const [g, v, a] = await Promise.all([
         getJSON("groups-meta", {}),
-        getJSON("venues-config", { scaleMax: 10, venues: [] }),
+        loadVenuesConfig(),
         getJSON("athletes", []),
       ]);
       setGroupsMeta(g);
