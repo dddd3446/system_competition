@@ -1170,6 +1170,8 @@ function AdminConsole({ onBack }) {
                 groupsMeta={groupsMeta}
                 venuesConfig={venuesConfig}
                 engine={engine}
+                athletes={athletes}
+                reload={loadAll}
               />
             )}
             {tab === "monitor" && (
@@ -1218,6 +1220,201 @@ function Loading() {
   );
 }
 
+/* ---- 選手出場序編輯（名單匯入與項目控制共用） ----
+   出場序的真正來源是 athletes[].order，groups-meta[gk].athleteIds 只是這組
+   的成員清單；兩邊都要跟著改，不然 computeGroupResults 排出來的順序會跟
+   畫面上看到的不一樣。寫入一律「先 athletes 後 meta」，athletes 失敗就
+   整個放棄，避免 athleteIds 指到已刪掉的人。 */
+function useAthleteOrderEditor(gk, athletes, reload) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const list = useMemo(
+    () =>
+      athletes
+        .filter((a) => groupKeyOf(a) === gk)
+        .sort((a, b) => (a.order || 0) - (b.order || 0)),
+    [athletes, gk]
+  );
+
+  /* nextIds 是這組要留下來的 id，照新的出場序排好。 */
+  const persist = async (nextIds) => {
+    setBusy(true);
+    setErr("");
+    /* 讀雲端最新的，不用 props：別台裝置剛改過的不要被蓋掉。 */
+    const all = await getJSON("athletes", []);
+    const rank = new Map(nextIds.map((id, i) => [id, i + 1]));
+    const kept = all.filter((a) => groupKeyOf(a) !== gk || rank.has(a.id));
+    const next = kept.map((a) =>
+      rank.has(a.id) ? { ...a, order: rank.get(a.id) } : a
+    );
+    const okAthletes = await setJSON("athletes", next);
+    if (!okAthletes) {
+      setBusy(false);
+      setErr("儲存失敗，請檢查網路後再試一次");
+      return false;
+    }
+    const okMeta = await sUpdate("groups-meta", { [`${gk}/athleteIds`]: nextIds });
+    setBusy(false);
+    if (!okMeta) {
+      setErr("出場序已存，但項目成員清單更新失敗，請重新整理後再試");
+      return false;
+    }
+    reload();
+    return true;
+  };
+
+  const moveBy = (id, delta) => {
+    const i = list.findIndex((a) => a.id === id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    const ids = list.map((a) => a.id);
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    persist(ids);
+  };
+
+  const removeOne = (id) =>
+    persist(list.filter((a) => a.id !== id).map((a) => a.id));
+
+  const reshuffle = () => persist(shuffle(list.map((a) => a.id)));
+
+  return { list, busy, err, moveBy, removeOne, reshuffle };
+}
+
+/* 展開後的選手清單：上移／下移／刪除。scored 為 true 的項目（已經有人評分）
+   只提醒，不阻止——臨時棄賽本來就得能刪。 */
+function AthleteOrderPanel({ gk, athletes, reload, note }) {
+  const { list, busy, err, moveBy, removeOne, reshuffle } =
+    useAthleteOrderEditor(gk, athletes, reload);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  if (list.length === 0)
+    return (
+      <div style={{ color: C.textFaint, fontSize: 12.5, padding: "6px 2px" }}>
+        這個項目沒有選手
+      </div>
+    );
+
+  return (
+    <div style={{ opacity: busy ? 0.6 : 1 }}>
+      {note && (
+        <div
+          style={{
+            color: C.textFaint,
+            fontSize: 11.5,
+            lineHeight: 1.5,
+            marginBottom: 6,
+          }}
+        >
+          {note}
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {list.map((a, i) => (
+          <div
+            key={a.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 8px",
+              borderRadius: 6,
+              background: C.surfaceAlt,
+              border: `1px solid ${C.border}`,
+            }}
+          >
+            <span
+              style={{
+                fontFamily: FONT_MONO,
+                fontSize: 12,
+                color: C.gold,
+                minWidth: 22,
+              }}
+            >
+              {i + 1}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: C.text, fontSize: 13 }}>{a.cnName}</div>
+              {a.enName && (
+                <div
+                  style={{
+                    color: C.textFaint,
+                    fontSize: 11,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {a.enName}
+                </div>
+              )}
+            </div>
+            <Btn
+              size="sm"
+              variant="ghost"
+              title="上移"
+              disabled={busy || i === 0}
+              onClick={() => moveBy(a.id, -1)}
+            >
+              <ArrowUp size={13} />
+            </Btn>
+            <Btn
+              size="sm"
+              variant="ghost"
+              title="下移"
+              disabled={busy || i === list.length - 1}
+              onClick={() => moveBy(a.id, 1)}
+            >
+              <ArrowDown size={13} />
+            </Btn>
+            <Btn
+              size="sm"
+              variant="ghost"
+              title={`刪除 ${a.cnName}`}
+              disabled={busy}
+              onClick={() => setConfirmDel(a)}
+              style={{ color: "#E08A7C" }}
+            >
+              <Trash2 size={13} />
+            </Btn>
+          </div>
+        ))}
+      </div>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          marginTop: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <Btn size="sm" variant="ghost" disabled={busy} onClick={reshuffle}>
+          <Shuffle size={13} /> 重新隨機這組
+        </Btn>
+        {busy && <span style={{ color: C.textFaint, fontSize: 11.5 }}>儲存中…</span>}
+      </div>
+      {err && (
+        <div style={{ color: "#E08A7C", fontSize: 12, marginTop: 6 }}>{err}</div>
+      )}
+      <Confirm
+        open={!!confirmDel}
+        text={
+          confirmDel
+            ? `確定要把 ${confirmDel.cnName} 從這個項目刪除嗎？後面的選手會自動往前遞補出場序。已評的分數不會被刪，但這位選手不再列入成績與排名。`
+            : ""
+        }
+        onYes={() => {
+          const a = confirmDel;
+          setConfirmDel(null);
+          removeOne(a.id);
+        }}
+        onNo={() => setConfirmDel(null)}
+      />
+    </div>
+  );
+}
+
 /* ---- Roster Tab ---- */
 function RosterTab({ athletes, groupsMeta, reload }) {
   const [text, setText] = useState("");
@@ -1226,6 +1423,8 @@ function RosterTab({ athletes, groupsMeta, reload }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   /* 關掉就照貼上的順序排，用於已經事先抽好籤的名單 */
   const [randomize, setRandomize] = useState(true);
+  /* 展開中的項目，點標題列切換 */
+  const [openGk, setOpenGk] = useState(null);
 
   const doImport = async () => {
     setBusy(true);
@@ -1454,22 +1653,61 @@ function RosterTab({ athletes, groupsMeta, reload }) {
         )}
         {Object.entries(byGroupCount).map(([k, count]) => {
           const meta = groupsMeta[k];
+          const expanded = openGk === k;
           return (
-            <Card
-              key={k}
-              style={{
-                padding: "10px 14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <span style={{ fontSize: 13.5, color: C.text }}>
-                {meta
-                  ? `${meta.ageGroup} · ${meta.eventName} · ${meta.gender}`
-                  : k}
-              </span>
-              <Badge>{count} 人</Badge>
+            <Card key={k} style={{ padding: 0, overflow: "hidden" }}>
+              <button
+                onClick={() => setOpenGk(expanded ? null : k)}
+                style={{
+                  width: "100%",
+                  background: "none",
+                  border: "none",
+                  padding: "10px 14px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 10,
+                  cursor: "pointer",
+                  fontFamily: FONT_BODY,
+                  textAlign: "left",
+                }}
+                title={expanded ? "收起" : "展開調整出場序"}
+              >
+                <span
+                  style={{
+                    fontSize: 13.5,
+                    color: C.text,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    minWidth: 0,
+                  }}
+                >
+                  <span style={{ color: C.textFaint, fontSize: 11 }}>
+                    {expanded ? "▾" : "▸"}
+                  </span>
+                  {meta
+                    ? `${meta.ageGroup} · ${meta.eventName} · ${meta.gender}`
+                    : k}
+                </span>
+                <Badge>{count} 人</Badge>
+              </button>
+              {expanded && (
+                <div
+                  style={{
+                    padding: "0 14px 12px",
+                    borderTop: `1px solid ${C.border}`,
+                    paddingTop: 10,
+                  }}
+                >
+                  <AthleteOrderPanel
+                    gk={k}
+                    athletes={athletes}
+                    reload={reload}
+                    note="上下移動調整出場序，垃圾桶刪除個別選手。"
+                  />
+                </div>
+              )}
             </Card>
           );
         })}
@@ -2220,13 +2458,15 @@ function useQueueEngine({ groupsMeta, setGroupsMeta, venuesConfig, athletes, ena
 /* ------------------------------------------------------------------ */
 /* Events Tab（純畫面，佇列邏輯在 useQueueEngine）                      */
 /* ------------------------------------------------------------------ */
-function EventsTab({ groupsMeta, venuesConfig, engine }) {
+function EventsTab({ groupsMeta, venuesConfig, engine, athletes, reload }) {
   const { queues, ready, headStatus, commit } = engine;
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedGk, setSelectedGk] = useState(null);
   const [activeCol, setActiveCol] = useState("pool");
   const [dragGk, setDragGk] = useState(null);
   const [confirmSkip, setConfirmSkip] = useState(null);
+  /* 展開中的項目（看選手出場序）。一次只開一個，欄位才不會被撐得太長。 */
+  const [openGk, setOpenGk] = useState(null);
 
   const isWide = useMediaQuery("(min-width: 900px)");
   const isTouch = useMediaQuery("(pointer: coarse)");
@@ -2338,6 +2578,14 @@ function EventsTab({ groupsMeta, venuesConfig, engine }) {
     })),
   ];
 
+  /* 展開選手清單用的一組 props，兩種欄位都要往下傳到卡片。 */
+  const expandProps = {
+    openGk,
+    onToggleOpen: (gk) => setOpenGk((p) => (p === gk ? null : gk)),
+    athletes,
+    reload,
+  };
+
   const poolCol = (
     <PoolColumn
       keys={poolKeys}
@@ -2351,6 +2599,7 @@ function EventsTab({ groupsMeta, venuesConfig, engine }) {
       onMoveTo={(gk, vid) => placeInto(gk, vid)}
       total={allKeys.length}
       dndOn={dndOn}
+      {...expandProps}
     />
   );
 
@@ -2372,6 +2621,7 @@ function EventsTab({ groupsMeta, venuesConfig, engine }) {
       onToggleAuto={() => commit({ type: "toggleAuto", venueId: v.id })}
       venues={venues}
       dndOn={dndOn}
+      {...expandProps}
     />
   ));
 
@@ -2584,6 +2834,10 @@ function PoolColumn({
   onMoveTo,
   total,
   dndOn,
+  openGk,
+  onToggleOpen,
+  athletes,
+  reload,
 }) {
   const dropActive = !!selectedGk && !keys.includes(selectedGk);
   return (
@@ -2635,6 +2889,10 @@ function PoolColumn({
             venues={venues}
             onMoveTo={onMoveTo}
             dndOn={dndOn}
+            expanded={openGk === gk}
+            onToggleOpen={onToggleOpen}
+            athletes={athletes}
+            reload={reload}
             sortable
           />
         ))}
@@ -2659,6 +2917,10 @@ function VenueColumn({
   onToggleAuto,
   venues,
   dndOn,
+  openGk,
+  onToggleOpen,
+  athletes,
+  reload,
 }) {
   const [showDone, setShowDone] = useState(false);
   const dropActive = !!selectedGk && !queue.order.includes(selectedGk);
@@ -2694,6 +2956,10 @@ function VenueColumn({
             venues={venues}
             onMoveTo={onMoveTo}
             dndOn={dndOn}
+            expanded={openGk === gk}
+            onToggleOpen={onToggleOpen}
+            athletes={athletes}
+            reload={reload}
             sortable
           />
         );
@@ -2785,6 +3051,10 @@ function VenueColumn({
                     venues={venues}
                     onMoveTo={onMoveTo}
                     dndOn={dndOn}
+                    expanded={openGk === gk}
+                    onToggleOpen={onToggleOpen}
+                    athletes={athletes}
+                    reload={reload}
                     sortable
                   />
                 );
@@ -2904,6 +3174,10 @@ function QueueItemBody({
   setNodeRef,
   handleProps,
   style,
+  expanded,
+  onToggleOpen,
+  athletes,
+  reload,
 }) {
   const badge = STATE_BADGE[state];
   const accent =
@@ -2967,7 +3241,32 @@ function QueueItemBody({
               flexWrap: "wrap",
             }}
           >
-            <span>{m.athleteIds?.length || 0} 位選手</span>
+            {onToggleOpen ? (
+              /* 點「N 位選手」展開出場序；這顆按鈕要吃掉 pointerdown，
+                 否則整張卡是拖動區，按下去會被當成開始拖。 */
+              <button
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleOpen(gk);
+                }}
+                title={expanded ? "收起選手" : "展開調整選手出場序"}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  color: expanded ? C.gold : C.textMuted,
+                  fontFamily: FONT_BODY,
+                  fontSize: 11.5,
+                  cursor: "pointer",
+                  textDecoration: "underline dotted",
+                }}
+              >
+                {expanded ? "▾" : "▸"} {m.athleteIds?.length || 0} 位選手
+              </button>
+            ) : (
+              <span>{m.athleteIds?.length || 0} 位選手</span>
+            )}
             {badge && <Badge tone={badge.tone}>{badge.label}</Badge>}
             {completion && state === "running" && (
               <span style={{ fontFamily: FONT_MONO }}>
@@ -3081,6 +3380,30 @@ function QueueItemBody({
           >
             <Play size={13} /> {state === "done" ? "重新開啟" : "開始"}
           </Btn>
+        </div>
+      )}
+
+      {expanded && athletes && (
+        <div
+          /* 清單內的上下／刪除都不該觸發拖動或選取。 */
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            marginTop: 8,
+            paddingTop: 8,
+            borderTop: `1px solid ${C.border}`,
+          }}
+        >
+          <AthleteOrderPanel
+            gk={gk}
+            athletes={athletes}
+            reload={reload}
+            note={
+              state === "running"
+                ? "這個項目正在進行中，改動出場序會立刻影響裁判端與大螢幕。"
+                : undefined
+            }
+          />
         </div>
       )}
     </div>
