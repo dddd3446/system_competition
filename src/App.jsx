@@ -1224,6 +1224,8 @@ function RosterTab({ athletes, groupsMeta, reload }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  /* 關掉就照貼上的順序排，用於已經事先抽好籤的名單 */
+  const [randomize, setRandomize] = useState(true);
 
   const doImport = async () => {
     setBusy(true);
@@ -1262,8 +1264,9 @@ function RosterTab({ athletes, groupsMeta, reload }) {
     Object.keys(byGroup).forEach((k) => {
       const inGroup = existing.filter((a) => groupKeyOf(a) === k);
       const base = inGroup.reduce((m, a) => Math.max(m, a.order || 0), 0);
-      /* 只打亂新加入的這批，原有選手的出場序保留 */
-      const shuffled = shuffle(byGroup[k]);
+      /* 只打亂新加入的這批，原有選手的出場序保留；
+         關掉隨機就照貼上的先後順序排。 */
+      const shuffled = randomize ? shuffle(byGroup[k]) : byGroup[k];
       shuffled.forEach((a, idx) => {
         a.order = base + idx + 1;
       });
@@ -1325,7 +1328,9 @@ function RosterTab({ athletes, groupsMeta, reload }) {
         (newGroups.length ? `、${newGroups.length} 個新項目組別` : "") +
         (skipped ? `，${skipped} 位已在名單中略過` : "") +
         (repaired ? `，修復 ${repaired} 個之前沒建好的項目` : "") +
-        `。目前共 ${finalList.length} 位（新選手接在同組最後，隨機排序）`
+        `。目前共 ${finalList.length} 位（新選手接在同組最後，${
+          randomize ? "隨機排序" : "照貼上順序"
+        }）`
     );
     setText("");
     reload();
@@ -1381,6 +1386,29 @@ function RosterTab({ athletes, groupsMeta, reload }) {
             resize: "vertical",
           }}
         />
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginTop: 12,
+            color: C.textMuted,
+            fontSize: 13,
+            cursor: "pointer",
+            userSelect: "none",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={randomize}
+            onChange={(e) => setRandomize(e.target.checked)}
+            style={{ width: 15, height: 15, accentColor: C.gold }}
+          />
+          新選手隨機排序
+          <span style={{ color: C.textFaint, fontSize: 12 }}>
+            （取消勾選＝照貼上的順序排，適合已事先抽籤的名單）
+          </span>
+        </label>
         <div
           style={{
             display: "flex",
@@ -1394,7 +1422,15 @@ function RosterTab({ athletes, groupsMeta, reload }) {
             onClick={doImport}
             disabled={busy || !text.trim()}
           >
-            <Shuffle size={15} /> 加入名單（新選手隨機排序）
+            {randomize ? (
+              <>
+                <Shuffle size={15} /> 加入名單（新選手隨機排序）
+              </>
+            ) : (
+              <>
+                <ArrowDown size={15} /> 加入名單（照貼上順序）
+              </>
+            )}
           </Btn>
           <Btn variant="danger" onClick={() => setConfirmOpen(true)}>
             <Trash2 size={14} /> 清空名單
