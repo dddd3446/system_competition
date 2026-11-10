@@ -14,7 +14,6 @@ import {
   Shuffle,
   ChevronLeft,
   Award,
-  X,
   Swords,
   Radio,
   Medal,
@@ -211,22 +210,6 @@ async function sUpdate(path, patch) {
     console.error("[Firebase] 更新失敗", path, e.code || e.message);
     return false;
   }
-}
-
-/* ------------------------------------------------------------------ */
-/* Admin password (存在雲端，不再寫死在前端)                            */
-/* ------------------------------------------------------------------ */
-const DEFAULT_ADMIN_PW = "8888";
-
-/* 首次執行時資料庫還沒有密碼，就用預設值建立，避免鎖住自己。
-   之後改密碼只要改資料庫的 admin-config/password，不用重新部署。 */
-async function verifyAdminPassword(input) {
-  const cfg = await sGet("admin-config");
-  if (cfg === null) {
-    await sSet("admin-config", { password: DEFAULT_ADMIN_PW });
-    return input === DEFAULT_ADMIN_PW;
-  }
-  return input === cfg.password;
 }
 
 /* ------------------------------------------------------------------ */
@@ -759,33 +742,9 @@ function Confirm({ open, text, onYes, onNo }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Landing & Admin Auth Modal                                         */
+/* Landing                                                            */
 /* ------------------------------------------------------------------ */
 function Landing({ onPick }) {
-  const [showAdminAuth, setShowAdminAuth] = useState(false);
-  const [pwd, setPwd] = useState("");
-  const [err, setErr] = useState(false);
-  const [checking, setChecking] = useState(false);
-
-  const handleAdminClick = () => {
-    setShowAdminAuth(true);
-    setPwd("");
-    setErr(false);
-  };
-
-  const verifyAdmin = async (e) => {
-    e.preventDefault();
-    setChecking(true);
-    setErr(false);
-    const ok = await verifyAdminPassword(pwd);
-    setChecking(false);
-    if (ok) {
-      onPick("admin");
-    } else {
-      setErr(true);
-    }
-  };
-
   return (
     <div
       style={{
@@ -850,7 +809,7 @@ function Landing({ onPick }) {
             label: "總控台",
             desc: "名單 · 場地 · 開項目 · 排名",
             icon: Settings,
-            onClick: handleAdminClick,
+            onClick: () => onPick("admin"),
           },
           {
             role: "judge",
@@ -917,94 +876,6 @@ function Landing({ onPick }) {
         ))}
       </div>
 
-      {showAdminAuth && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(10,8,6,0.8)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 100,
-            padding: 16,
-          }}
-        >
-          <Card style={{ padding: 24, width: "100%", maxWidth: 340 }}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 16,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  color: C.text,
-                  fontFamily: FONT_DISPLAY,
-                  fontSize: 18,
-                }}
-              >
-                <Lock size={18} color={C.red} /> 總控台驗證
-              </div>
-              <button
-                onClick={() => setShowAdminAuth(false)}
-                style={{
-                  background: "none",
-                  border: "none",
-                  color: C.textFaint,
-                  cursor: "pointer",
-                }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <form
-              onSubmit={verifyAdmin}
-              style={{ display: "flex", flexDirection: "column", gap: 12 }}
-            >
-              <Field label="請輸入總控台密碼">
-                <TextInput
-                  type="password"
-                  placeholder="預設密碼: 8888"
-                  value={pwd}
-                  onChange={(e) => {
-                    setPwd(e.target.value);
-                    setErr(false);
-                  }}
-                  autoFocus
-                />
-              </Field>
-              {err && (
-                <div style={{ color: C.red, fontSize: 12, fontWeight: 600 }}>
-                  密碼錯誤，請重新輸入
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
-                <Btn
-                  variant="ghost"
-                  onClick={() => setShowAdminAuth(false)}
-                  style={{ flex: 1, justifyContent: "center" }}
-                >
-                  取消
-                </Btn>
-                <Btn
-                  variant="primary"
-                  type="submit"
-                  disabled={checking}
-                  style={{ flex: 1, justifyContent: "center" }}
-                >
-                  {checking ? "驗證中…" : "確認進入"}
-                </Btn>
-              </div>
-            </form>
-          </Card>
-        </div>
-      )}
     </div>
   );
 }
