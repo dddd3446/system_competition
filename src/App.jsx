@@ -4643,7 +4643,7 @@ const EVENT_EN = {
   匕首: "Dagger",
   短兵: "Short Weapon", 长兵: "Long Weapon", 長兵: "Long Weapon",
   /* 對抗、其他 */
-  推手: "Tuishou", 散打: "Sanda", 散手: "Sanshou",
+  推手: "Push Hands", 散打: "Sanda", 散手: "Sanshou",
   对练: "Duilian", 對練: "Duilian",
   徒手: "Barehand", 空手: "Barehand",
   集体: "Group", 集體: "Group",
