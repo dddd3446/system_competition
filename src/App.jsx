@@ -4596,6 +4596,18 @@ const EVENT_EN = {
   象形拳: "Imitation Boxing",
   猴拳: "Monkey Fist", 鹰爪: "Eagle Claw", 鷹爪: "Eagle Claw",
   少林: "Shaolin", 武当: "Wudang", 武當: "Wudang",
+  咏春拳: "Wing Chun", 詠春拳: "Wing Chun",
+  翻子拳: "Fanziquan", 劈挂拳: "Piguaquan", 劈掛拳: "Piguaquan",
+  绵拳: "Mianquan", 綿拳: "Mianquan",
+  六合拳: "Liuhequan", 心意六合拳: "Xinyi Liuhequan",
+  弹腿: "Tantui", 彈腿: "Tantui",
+  /* 太極流派：式／式太极拳都要能對到 */
+  陈式: "Chen Style", 陳式: "Chen Style",
+  杨式: "Yang Style", 楊式: "Yang Style",
+  吴式: "Wu (Hao) Style", 吳式: "Wu (Hao) Style",
+  孙式: "Sun Style", 孫式: "Sun Style",
+  武式: "Wu Style",
+  式: "Style",
   自选: "Optional", 自選: "Optional",
   规定: "Compulsory", 規定: "Compulsory",
   传统: "Traditional", 傳統: "Traditional",
@@ -4619,10 +4631,21 @@ const EVENT_EN = {
   双剑: "Double Jian", 雙劍: "Double Jian",
   三节棍: "Three-Section Staff", 三節棍: "Three-Section Staff",
   九节鞭: "Nine-Section Whip", 九節鞭: "Nine-Section Whip",
-  大刀: "Great Dao", 朴刀: "Pudao", 戟: "Ji", 钩: "Hook", 鈎: "Hook",
+  大刀: "Great Dao", 朴刀: "Pudao", 戟: "Ji", 钩: "Hook", 鈎: "Hook", 鉤: "Hook",
+  峨眉刺: "Emei Ci", 双钩: "Double Hook", 雙鈎: "Double Hook", 雙鉤: "Double Hook",
+  双鞭: "Double Whip", 雙鞭: "Double Whip",
+  流星锤: "Meteor Hammer", 流星錘: "Meteor Hammer",
+  南刀: "Nandao", 南棍: "Nangun",
+  春秋大刀: "Chunqiu Great Dao",
+  虎头钩: "Tiger Head Hook", 虎頭鈎: "Tiger Head Hook",
+  判官笔: "Panguan Bi", 判官筆: "Panguan Bi",
+  双匕首: "Double Dagger", 雙匕首: "Double Dagger",
+  匕首: "Dagger",
+  短兵: "Short Weapon", 长兵: "Long Weapon", 長兵: "Long Weapon",
   /* 對抗、其他 */
   推手: "Tuishou", 散打: "Sanda", 散手: "Sanshou",
   对练: "Duilian", 對練: "Duilian",
+  徒手: "Barehand", 空手: "Barehand",
   集体: "Group", 集體: "Group",
   团体: "Team", 團體: "Team",
   功力: "Gongli", 气功: "Qigong", 氣功: "Qigong",
@@ -4632,6 +4655,9 @@ const EVENT_EN = {
   成人: "Adult", 青年: "Youth", 少年: "Junior",
   第一套: "Routine 1", 第二套: "Routine 2", 第三套: "Routine 3",
   组: "", 組: "", 术: "", 術: "",
+  /* 通用尾字：放在最後，前面的專有名詞（长拳、南拳…）因為較長會先對到。 */
+  项目: "Event", 項目: "Event",
+  拳: "Quan",
 };
 
 /* 最長詞優先掃描。全部字元都對到（或是空白／標點）才回傳英文，否則回 null。 */
@@ -4660,6 +4686,13 @@ function eventNameEn(name) {
       const inner = src.slice(i + 1, end).trim();
       if (inner) out.push(`(${inner})`);
       i = end + 1;
+      continue;
+    }
+    /* 數字原樣保留：「24式太极拳」→「24 Style Taijiquan」。 */
+    const num = /^\d+/.exec(src.slice(i));
+    if (num) {
+      out.push(num[0]);
+      i += num[0].length;
       continue;
     }
     const hit = EVENT_EN_KEYS.find((k) => src.startsWith(k, i));
