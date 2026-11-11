@@ -4570,6 +4570,120 @@ function VenueDisplay({ venueId, onBack }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 項目英文名（匯出 Excel 用）                                          */
+/* ------------------------------------------------------------------ */
+/* 名單只有 5 欄，沒有項目英文，所以這裡放一張中→英對照表，匯出時自動組出
+   英文標題。項目名是組合字（「传统太极长器械」＝传统＋太极＋长器械），
+   逐詞比對會拆錯，所以用「最長詞優先」掃過整個字串：每個位置都先試最長的
+   詞，對到就吃掉往後走。沒對到的字留著不翻，整個項目若有一個字沒對到就
+   只輸出中文，寧可少一行英文也不要給出半中半英的標題。
+   简体、繁體都列，因為名單兩種都可能貼進來。 */
+const EVENT_EN = {
+  /* 拳術 */
+  长拳: "Changquan", 長拳: "Changquan",
+  南拳: "Nanquan",
+  太极拳: "Taijiquan", 太極拳: "Taijiquan",
+  太极: "Taiji", 太極: "Taiji",
+  形意拳: "Xingyiquan", 八卦掌: "Baguazhang",
+  咏春: "Wing Chun", 詠春: "Wing Chun",
+  八极拳: "Bajiquan", 八極拳: "Bajiquan",
+  通背拳: "Tongbeiquan", 螳螂拳: "Praying Mantis",
+  醉拳: "Drunken Fist", 地趟拳: "Ditangquan",
+  查拳: "Chaquan", 华拳: "Huaquan", 華拳: "Huaquan",
+  炮拳: "Paoquan", 洪拳: "Hungquan",
+  蔡李佛: "Choy Li Fut",
+  五祖拳: "Wuzuquan", 白鶴拳: "White Crane", 白鹤拳: "White Crane",
+  象形拳: "Imitation Boxing",
+  猴拳: "Monkey Fist", 鹰爪: "Eagle Claw", 鷹爪: "Eagle Claw",
+  少林: "Shaolin", 武当: "Wudang", 武當: "Wudang",
+  自选: "Optional", 自選: "Optional",
+  规定: "Compulsory", 規定: "Compulsory",
+  传统: "Traditional", 傳統: "Traditional",
+  基础: "Basic", 基礎: "Basic",
+  初级: "Elementary", 初級: "Elementary",
+  中级: "Intermediate", 中級: "Intermediate",
+  高级: "Advanced", 高級: "Advanced",
+  /* 器械 */
+  长器械: "Long Weapon", 長器械: "Long Weapon",
+  短器械: "Short Weapon",
+  短兵器: "Short Weapon", 长兵器: "Long Weapon", 長兵器: "Long Weapon",
+  双器械: "Double Weapon", 雙器械: "Double Weapon",
+  软器械: "Flexible Weapon", 軟器械: "Flexible Weapon",
+  器械: "Weapon",
+  剑术: "Jianshu", 劍術: "Jianshu", 剑: "Jian", 劍: "Jian",
+  刀术: "Daoshu", 刀術: "Daoshu", 刀: "Dao",
+  枪术: "Qiangshu", 槍術: "Qiangshu", 枪: "Qiang", 槍: "Qiang",
+  棍术: "Gunshu", 棍術: "Gunshu", 棍: "Gun",
+  扇: "Fan", 鞭: "Whip", 绳镖: "Rope Dart", 繩鏢: "Rope Dart",
+  双刀: "Double Dao", 雙刀: "Double Dao",
+  双剑: "Double Jian", 雙劍: "Double Jian",
+  三节棍: "Three-Section Staff", 三節棍: "Three-Section Staff",
+  九节鞭: "Nine-Section Whip", 九節鞭: "Nine-Section Whip",
+  大刀: "Great Dao", 朴刀: "Pudao", 戟: "Ji", 钩: "Hook", 鈎: "Hook",
+  /* 對抗、其他 */
+  推手: "Tuishou", 散打: "Sanda", 散手: "Sanshou",
+  对练: "Duilian", 對練: "Duilian",
+  集体: "Group", 集體: "Group",
+  团体: "Team", 團體: "Team",
+  功力: "Gongli", 气功: "Qigong", 氣功: "Qigong",
+  /* 修飾語 */
+  男子: "Men's", 女子: "Women's",
+  儿童: "Children", 兒童: "Children",
+  成人: "Adult", 青年: "Youth", 少年: "Junior",
+  第一套: "Routine 1", 第二套: "Routine 2", 第三套: "Routine 3",
+  组: "", 組: "", 术: "", 術: "",
+};
+
+/* 最長詞優先掃描。全部字元都對到（或是空白／標點）才回傳英文，否則回 null。 */
+const EVENT_EN_KEYS = Object.keys(EVENT_EN).sort((a, b) => b.length - a.length);
+function eventNameEn(name) {
+  const src = String(name || "").trim();
+  if (!src) return null;
+  const out = [];
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    /* 空白與分隔符號直接跳過；括號內的重量級別（22.5kg）原樣保留。 */
+    if (/\s|[-·、，,]/.test(ch)) {
+      i++;
+      continue;
+    }
+    if (/[（(]/.test(ch)) {
+      /* 從 i 之後找，不是從頭找：有兩組括號時從頭找會切錯。 */
+      let close = -1;
+      for (let j = i + 1; j < src.length; j++)
+        if (/[）)]/.test(src[j])) {
+          close = j;
+          break;
+        }
+      const end = close === -1 ? src.length : close;
+      const inner = src.slice(i + 1, end).trim();
+      if (inner) out.push(`(${inner})`);
+      i = end + 1;
+      continue;
+    }
+    const hit = EVENT_EN_KEYS.find((k) => src.startsWith(k, i));
+    /* 有一個詞不認識就整個放棄，不輸出半中半英的標題。 */
+    if (hit === undefined) return null;
+    if (EVENT_EN[hit]) out.push(EVENT_EN[hit]);
+    i += hit.length;
+  }
+  return out.length ? out.join(" ") : null;
+}
+
+/* 項目標題的英文版：「U10 Traditional Taiji Long Weapon - Women's」。
+   年齡組（U10、成人組…）原樣保留，數字與 U 開頭的代號不需要翻。 */
+function groupTitleEn(meta) {
+  const ev = eventNameEn(meta.eventName);
+  if (!ev) return null;
+  const age = String(meta.ageGroup || "").trim();
+  const ageEn = /^[A-Za-z0-9+\-\s]+$/.test(age) ? age : eventNameEn(age) || age;
+  const g = (meta.gender || "").replace(/[组組]$/, "");
+  const gEn = g ? eventNameEn(g) : null;
+  return [ageEn, ev].filter(Boolean).join(" ") + (gEn ? ` - ${gEn}` : "");
+}
+
+/* ------------------------------------------------------------------ */
 /* Excel 匯出（成績看板）                                               */
 /* ------------------------------------------------------------------ */
 /* 獎牌名額：有成績的選手每人一面，金 20%、銀 40%、銅 40%。先分整數部分，
@@ -4629,7 +4743,15 @@ async function exportResultsXlsx(groupsMeta, venuesConfig, athletes) {
 
     if (rows.length) rows.push([]);
     const gender = (meta.gender || "").replace(/[组組]$/, "");
-    rows.push([`${meta.ageGroup} ${meta.eventName}-${gender}`]);
+    /* 中文標題照舊在第一欄，英文放第三欄（英文姓名那一欄，寬度 26 放得下，
+       第二欄只有 12 會被切掉）。不另開一列，因為主辦方的模板是照列數對的，
+       多一列會打亂「標題列之後就是選手」。翻不出來的項目英文留空。 */
+    const titleEn = groupTitleEn(meta);
+    rows.push([
+      `${meta.ageGroup} ${meta.eventName}-${gender}`,
+      "",
+      titleEn || "",
+    ]);
     /* 同分並列時照排列順序給牌，不看名次 */
     const medals = medalsFor(done.length);
     for (const [i, r] of [...done, ...pending].entries()) {
