@@ -8,6 +8,8 @@ import {
   LogIn,
   AlertTriangle,
   Check,
+  Pencil,
+  X,
   Plus,
   Trash2,
   RefreshCw,
@@ -409,7 +411,11 @@ async function computeGroupResults(groupKey, meta, venue, athletesAll) {
         avg = sorted.reduce((s, v) => s + v, 0) / 3;
       }
       const bonus = typeof bonusMap[a.id] === "number" ? bonusMap[a.id] : 0;
-      final = +(avg + bonus).toFixed(3);
+      /* 最終得分以 2 位小數定案，跟畫面與獎狀上看到的數字一致。
+         原本存到 3 位：8.503 與 8.500 在畫面與 Excel 上都顯示 8.50，
+         排名卻分出高下，獎牌也跟著不同，這是爭議來源（測試報告問題 5）。
+         現在看起來同分就是真的同分，並列給獎。 */
+      final = +(avg + bonus).toFixed(2);
     }
     return {
       athlete: a,
@@ -535,8 +541,10 @@ async function computeBestAthletes(groupsMeta, venuesConfig, athletesAll) {
     .map((s) => {
       const scoredEvents = s.events.filter((e) => e.final !== null);
       const sum = scoredEvents.reduce((acc, e) => acc + e.final, 0);
+      /* 同樣以 2 位小數定案：最佳運動員的名次也是看這個數字排的，
+         存 3 位會出現「畫面同分、名次不同」。 */
       const avg =
-        scoredEvents.length > 0 ? +(sum / scoredEvents.length).toFixed(3) : 0;
+        scoredEvents.length > 0 ? +(sum / scoredEvents.length).toFixed(2) : 0;
       return { ...s, avg, scoredCount: scoredEvents.length };
     });
 
@@ -1070,7 +1078,17 @@ function AdminConsole({ onBack }) {
 
   /* 記住陣列本身：引擎的 headStatus 每次有人打分都會讓總控台重繪，每次
      都給新陣列的話，即時監看與排名結果會把全部項目重抓一遍。 */
-  const groupKeys = useMemo(() => Object.keys(groupsMeta), [groupsMeta]);
+  /* 排序一次給所有下拉選單用（即時監看、排名結果）：numeric 讓
+     U7 < U9 < U10，而不是字典序的 U10 < U7。 */
+  const groupKeys = useMemo(
+    () =>
+      Object.keys(groupsMeta).sort((a, b) => {
+        const label = (k) =>
+          `${groupsMeta[k].ageGroup}|${groupsMeta[k].eventName}|${groupsMeta[k].gender}`;
+        return label(a).localeCompare(label(b), "zh-Hant", { numeric: true });
+      }),
+    [groupsMeta]
+  );
 
   return (
     <div style={{ minHeight: "100vh" }}>
@@ -1246,15 +1264,53 @@ function useAthleteOrderEditor(gk, athletes, reload) {
 
   const reshuffle = () => persist(shuffle(list.map((a) => a.id)));
 
-  return { list, busy, err, moveBy, removeOne, reshuffle };
+  /* 改名。id 不動，所以已經打好的分數（score:<組>:<裁判>/<選手id>）
+     會跟著這位選手，不必重打——這是改名要獨立做、不能用「刪掉再加回去」
+     代替的原因（測試報告問題 8）。
+     年齡組／項目／組別都不改，那會換組（groupKey 變），是另一回事。 */
+  const rename = async (id, cnName, enName) => {
+    const cn = String(cnName || "").trim();
+    if (!cn) {
+      setErr("中文姓名不能空白");
+      return false;
+    }
+    setBusy(true);
+    setErr("");
+    const all = await getJSON("athletes", []);
+    const next = all.map((a) =>
+      a.id === id ? { ...a, cnName: cn, enName: String(enName || "").trim() } : a
+    );
+    const ok = await setJSON("athletes", next);
+    setBusy(false);
+    if (!ok) {
+      setErr("儲存失敗，請檢查網路後再試一次");
+      return false;
+    }
+    reload();
+    return true;
+  };
+
+  return { list, busy, err, moveBy, removeOne, reshuffle, rename };
 }
 
 /* 展開後的選手清單：上移／下移／刪除。scored 為 true 的項目（已經有人評分）
    只提醒，不阻止——臨時棄賽本來就得能刪。 */
 function AthleteOrderPanel({ gk, athletes, reload, note }) {
-  const { list, busy, err, moveBy, removeOne, reshuffle } =
+  const { list, busy, err, moveBy, removeOne, reshuffle, rename } =
     useAthleteOrderEditor(gk, athletes, reload);
   const [confirmDel, setConfirmDel] = useState(null);
+  /* 正在改名的選手 id 與編輯中的欄位值 */
+  const [editId, setEditId] = useState(null);
+  const [draft, setDraft] = useState({ cnName: "", enName: "" });
+
+  const startEdit = (a) => {
+    setEditId(a.id);
+    setDraft({ cnName: a.cnName || "", enName: a.enName || "" });
+  };
+  const saveEdit = async () => {
+    const ok = await rename(editId, draft.cnName, draft.enName);
+    if (ok) setEditId(null);
+  };
 
   if (list.length === 0)
     return (
@@ -1301,50 +1357,115 @@ function AthleteOrderPanel({ gk, athletes, reload, note }) {
             >
               {i + 1}
             </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ color: C.text, fontSize: 13 }}>{a.cnName}</div>
-              {a.enName && (
-                <div
-                  style={{
-                    color: C.textFaint,
-                    fontSize: 11,
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
+            {editId === a.id ? (
+              /* 改名中：中英文各一格。id 不變，分數會跟著這位選手。 */
+              <div
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  display: "flex",
+                  gap: 6,
+                  flexWrap: "wrap",
+                }}
+              >
+                <TextInput
+                  value={draft.cnName}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, cnName: e.target.value }))
+                  }
+                  placeholder="中文姓名"
+                  autoFocus
+                  style={{ flex: "1 1 110px", minWidth: 0, padding: "5px 8px", fontSize: 13 }}
+                />
+                <TextInput
+                  value={draft.enName}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, enName: e.target.value }))
+                  }
+                  placeholder="英文姓名"
+                  style={{ flex: "1 1 150px", minWidth: 0, padding: "5px 8px", fontSize: 13 }}
+                />
+              </div>
+            ) : (
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: C.text, fontSize: 13 }}>{a.cnName}</div>
+                {a.enName && (
+                  <div
+                    style={{
+                      color: C.textFaint,
+                      fontSize: 11,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {a.enName}
+                  </div>
+                )}
+              </div>
+            )}
+            {editId === a.id ? (
+              <>
+                <Btn
+                  size="sm"
+                  variant="gold"
+                  title="儲存"
+                  disabled={busy || !draft.cnName.trim()}
+                  onClick={saveEdit}
                 >
-                  {a.enName}
-                </div>
-              )}
-            </div>
-            <Btn
-              size="sm"
-              variant="ghost"
-              title="上移"
-              disabled={busy || i === 0}
-              onClick={() => moveBy(a.id, -1)}
-            >
-              <ArrowUp size={13} />
-            </Btn>
-            <Btn
-              size="sm"
-              variant="ghost"
-              title="下移"
-              disabled={busy || i === list.length - 1}
-              onClick={() => moveBy(a.id, 1)}
-            >
-              <ArrowDown size={13} />
-            </Btn>
-            <Btn
-              size="sm"
-              variant="ghost"
-              title={`刪除 ${a.cnName}`}
-              disabled={busy}
-              onClick={() => setConfirmDel(a)}
-              style={{ color: "#E08A7C" }}
-            >
-              <Trash2 size={13} />
-            </Btn>
+                  <Check size={13} />
+                </Btn>
+                <Btn
+                  size="sm"
+                  variant="ghost"
+                  title="取消"
+                  disabled={busy}
+                  onClick={() => setEditId(null)}
+                >
+                  <X size={13} />
+                </Btn>
+              </>
+            ) : (
+              <>
+                <Btn
+                  size="sm"
+                  variant="ghost"
+                  title={`改名 ${a.cnName}`}
+                  disabled={busy}
+                  onClick={() => startEdit(a)}
+                >
+                  <Pencil size={13} />
+                </Btn>
+                <Btn
+                  size="sm"
+                  variant="ghost"
+                  title="上移"
+                  disabled={busy || i === 0}
+                  onClick={() => moveBy(a.id, -1)}
+                >
+                  <ArrowUp size={13} />
+                </Btn>
+                <Btn
+                  size="sm"
+                  variant="ghost"
+                  title="下移"
+                  disabled={busy || i === list.length - 1}
+                  onClick={() => moveBy(a.id, 1)}
+                >
+                  <ArrowDown size={13} />
+                </Btn>
+                <Btn
+                  size="sm"
+                  variant="ghost"
+                  title={`刪除 ${a.cnName}`}
+                  disabled={busy}
+                  onClick={() => setConfirmDel(a)}
+                  style={{ color: "#E08A7C" }}
+                >
+                  <Trash2 size={13} />
+                </Btn>
+              </>
+            )}
           </div>
         ))}
       </div>
@@ -2528,12 +2649,20 @@ function EventsTab({ groupsMeta, venuesConfig, engine, athletes, reload }) {
     q.order.forEach((gk) => queuedSet.add(gk));
     q.done.forEach((gk) => queuedSet.add(gk));
   }
+  /* 資料庫欄照年齡組→項目→組別排序，而且 numeric 讓 U7 < U9 < U10，
+     不是字典序的 U10 < U7（測試報告問題 9）。Object.keys 的順序是
+     Firebase 回來的順序，排場地時很難找。 */
   const poolKeys = allKeys
     .filter((gk) => !queuedSet.has(gk))
     .filter((gk) => {
       const m = groupsMeta[gk];
       const text = `${m.ageGroup} ${m.eventName} ${m.gender}`.toLowerCase();
       return text.includes(searchQuery.toLowerCase());
+    })
+    .sort((a, b) => {
+      const label = (k) =>
+        `${groupsMeta[k].ageGroup}|${groupsMeta[k].eventName}|${groupsMeta[k].gender}`;
+      return label(a).localeCompare(label(b), "zh-Hant", { numeric: true });
     });
 
   const placeInto = (gk, vid) => {
@@ -4505,6 +4634,10 @@ function DisplayPicker({ onPick, onBack }) {
   );
 }
 
+/* 個人成績版每位選手至少停留多久。裁判長連續快速輸入時，中間的選手
+   原本幾乎不會出現在螢幕上；排隊播放讓每位都有觀眾看得到的時間。 */
+const MIN_SHOW_MS = 6000;
+
 /* 場上目前的項目：場地佇列首位且已開啟。場地沒有開啟中的項目時（全部跑完、
    或總控台還沒按開始），退回最近完成的項目，讓畫面停在最後一位的成績。 */
 function displayGroupOf(venueId, groupsMeta, queues) {
@@ -4525,6 +4658,11 @@ function VenueDisplay({ venueId, onBack }) {
   /* 目前顯示的選手。只在「有新的選手成績確定」時才換，所以項目切換到下一組
      、下一位還沒評完之前，畫面會停在上一位的成績。 */
   const [shown, setShown] = useState(null);
+  /* 已經顯示過的選手（key 是 "<組>:<選手id>"），用來找出還沒輪到的人。
+     原本直接跳到「最後一位完成的」，裁判長連續快速輸入時中間那位幾乎
+     不會停留（測試報告 5b）。改成排隊，每位至少停 MIN_SHOW_MS。 */
+  const shownKeysRef = useRef(new Set());
+  const holdUntilRef = useRef(0);
 
   useEffect(() => {
     const offs = [
@@ -4545,6 +4683,11 @@ function VenueDisplay({ venueId, onBack }) {
   useEffect(() => {
     if (!venue || !gk) return;
     let active = true;
+    let advanceTimer = null;
+    /* 換組就重新算：上一組播過誰跟這一組無關，而且重新開啟補分時
+       應該要能再播一次。 */
+    shownKeysRef.current = new Set();
+    holdUntilRef.current = 0;
     const check = async () => {
       const meta = metaRef.current[gk];
       if (!meta) return;
@@ -4554,10 +4697,30 @@ function VenueDisplay({ venueId, onBack }) {
          取出場順序最後的一位：前面的選手事後改分，畫面不會倒退回去。
          分差超過 0.5 要先開評審會議，改完分之前畫面停在上一位不跳。 */
       const done = results.filter(
-        (r) => r.complete && typeof r.bonus === "number"
+        (r) => r.complete && typeof r.bonus === "number" && !r.needsMeeting
       );
-      const latest = done[done.length - 1];
-      if (latest && !latest.needsMeeting) setShown({ gk, meta, result: latest });
+      if (!done.length) return;
+      /* 還沒播過的，照出場順序一位一位來；都播過了就停在最後一位。 */
+      const pending = done.filter(
+        (r) => !shownKeysRef.current.has(`${gk}:${r.athlete.id}`)
+      );
+      if (!pending.length) return;
+      const now = Date.now();
+      if (now < holdUntilRef.current) {
+        /* 前一位還沒停滿，稍後再來（不堆疊計時器，用固定延遲重試）。 */
+        clearTimeout(advanceTimer);
+        advanceTimer = setTimeout(check, holdUntilRef.current - now);
+        return;
+      }
+      const next = pending[0];
+      shownKeysRef.current.add(`${gk}:${next.athlete.id}`);
+      holdUntilRef.current = now + MIN_SHOW_MS;
+      setShown({ gk, meta, result: next });
+      /* 後面還有人排隊就接著播。 */
+      if (pending.length > 1) {
+        clearTimeout(advanceTimer);
+        advanceTimer = setTimeout(check, MIN_SHOW_MS);
+      }
     };
     check();
     const offs = [
@@ -4566,6 +4729,7 @@ function VenueDisplay({ venueId, onBack }) {
     ];
     return () => {
       active = false;
+      clearTimeout(advanceTimer);
       offs.forEach((off) => off());
     };
   }, [gk, venue, athletes]);
@@ -4987,7 +5151,11 @@ async function exportResultsXlsx(groupsMeta, venuesConfig, athletes) {
     const pending = list.filter((r) => r.final === null);
 
     if (rows.length) rows.push([]);
-    const gender = (meta.gender || "").replace(/[组組]$/, "");
+    /* 組別保留「组」字，並用全角空格＋「·」跟項目名隔開。
+       原本是 `項目-組別` 且去掉「组」，碰上項目名本身含「-」就變成
+       「U7 传统拳术-北派-女子」，分不出哪段是項目、哪段是組別
+       （測試報告問題 6）。 */
+    const gender = String(meta.gender || "").trim();
     /* 中文標題照舊在第一欄，英文放第三欄（英文姓名那一欄，寬度 26 放得下，
        第二欄只有 12 會被切掉）。不另開一列，因為主辦方的模板是照列數對的，
        多一列會打亂「標題列之後就是選手」。翻不出來的項目英文留空。 */
@@ -4996,7 +5164,7 @@ async function exportResultsXlsx(groupsMeta, venuesConfig, athletes) {
        沒有成績，匯出與看板都沒有任何提示，只能靠即時監看一組一組看。 */
     const missing = pending.length;
     rows.push([
-      `${meta.ageGroup} ${meta.eventName}-${gender}`,
+      [meta.ageGroup, meta.eventName, gender].filter(Boolean).join(" · "),
       missing ? `⚠ 缺 ${missing} 人成績` : "",
       titleEn || "",
     ]);
@@ -5015,7 +5183,8 @@ async function exportResultsXlsx(groupsMeta, venuesConfig, athletes) {
   }
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  /* 存真實分數（算到小數 3 位），只把顯示格式設成 2 位 */
+  /* 分數本身就是 2 位小數定案的值，這裡只是把顯示格式也固定成 2 位，
+     讓 8.5 顯示成 8.50。 */
   for (const i of scoreCells) {
     const cell = ws[XLSX.utils.encode_cell({ r: i, c: 3 })];
     if (cell) cell.z = "0.00";
