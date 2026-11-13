@@ -173,6 +173,29 @@ function sWatch(key, cb) {
     off();
   };
 }
+/* 根節點（wushu_data 本身）的讀取與多路徑更新。sGet/sUpdate 是接在
+   "wushu_data/" 後面組路徑的，傳空字串會變成尾隨斜線，這裡明確指到根節點。 */
+async function sGetRoot() {
+  try {
+    await authReady;
+    const snapshot = await get(ref(db, "wushu_data"));
+    return snapshot.exists() ? snapshot.val() : null;
+  } catch (e) {
+    console.error("[Firebase] 讀取根節點失敗", e.code || e.message);
+    return null;
+  }
+}
+async function sUpdateRoot(patch) {
+  try {
+    await authReady;
+    await update(ref(db, "wushu_data"), patch);
+    return true;
+  } catch (e) {
+    console.error("[Firebase] 根節點更新失敗", e.code || e.message);
+    return false;
+  }
+}
+
 const getJSON = async (key, fallback) => {
   const v = await sGet(key);
   return v !== null ? v : fallback;
@@ -212,6 +235,40 @@ async function sUpdate(path, patch) {
   }
 }
 
+/* 清除所有評分紀錄：score:<組>:<裁判> 與 bonus:<組>。
+   這些 key 平放在 wushu_data 下，所以列出根節點的 key 再挑出來刪。
+   用一次 multi-path update 把它們全設成 null（＝刪除），避免刪一半斷線。
+   名單、場地、項目設定都不碰；佇列的「已完成」另外由呼叫端決定要不要清。 */
+async function clearAllScores({ alsoResetQueues } = {}) {
+  const root = await sGetRoot();
+  if (!root) return { ok: true, removed: 0 };
+  const keys = Object.keys(root).filter(
+    (k) => k.startsWith("score:") || k.startsWith("bonus:")
+  );
+  const patch = {};
+  keys.forEach((k) => {
+    patch[k] = null;
+  });
+  if (alsoResetQueues) {
+    /* 把每個場地的已完成清單倒回待跑，並關掉所有項目的 open／完成狀態，
+       否則分數清光了、看板卻還顯示 70 組已完成。 */
+    const queues = root.queues || {};
+    Object.keys(queues).forEach((vid) => {
+      const q = normQueue(queues[vid]);
+      patch[`queues/${vid}/order`] = [...q.done, ...q.order];
+      patch[`queues/${vid}/done`] = null;
+    });
+    const meta = root["groups-meta"] || {};
+    Object.keys(meta).forEach((gk) => {
+      if (meta[gk] && meta[gk].open) patch[`groups-meta/${gk}/open`] = false;
+      patch[`groups-meta/${gk}/status`] = meta[gk] && meta[gk].venueId ? "queued" : "idle";
+    });
+  }
+  if (!Object.keys(patch).length) return { ok: true, removed: 0 };
+  const ok = await sUpdateRoot(patch);
+  return { ok, removed: keys.length };
+}
+
 /* ------------------------------------------------------------------ */
 /* Domain helpers                                                     */
 /* ------------------------------------------------------------------ */
@@ -225,25 +282,44 @@ function normGender(raw) {
   return raw.trim();
 }
 
+/* 一行切成欄。原本是 split(/\t|,|\s+/)，把空白也當分隔，所以項目名裡
+   本來就有空白的（「国际第一套 - 南拳」）會被拆成三欄，整行欄位往後錯位，
+   連 Excel 貼上的 Tab 格式都一起壞掉。
+   改成有 Tab 就只用 Tab、有逗號就只用逗號（Excel 與 CSV 都落在這兩種），
+   空白留給項目名與英文姓名；兩者都沒有才退回用空白切，維持舊格式可用。 */
+function splitRosterRow(line) {
+  if (line.includes("\t")) return line.split("\t");
+  if (line.includes(",")) return line.split(",");
+  return line.split(/\s+/);
+}
+
+/* out.ambiguous 收集「用空白切、欄數多於 5、而且第 3 欄不含男/女」的行號：
+   這種行幾乎確定是項目名含空白被拆開了（性別欄會變成「-」這類東西），
+   呼叫端要提醒改用 Tab 或逗號，而不是悄悄解析錯。
+   英文姓名含空白會讓欄數多於 5，但性別欄仍是「女子组」，不算可疑。 */
 function parseRoster(text) {
   const lines = text
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);
   const out = [];
-  for (const line of lines) {
-    const parts = line
-      .split(/\t|,|\s+/)
+  const ambiguous = [];
+  lines.forEach((line, idx) => {
+    const spaceOnly = !line.includes("\t") && !line.includes(",");
+    const parts = splitRosterRow(line)
       .map((s) => s.trim())
       .filter((s) => s.length);
-    if (parts.length < 5) continue;
+    if (parts.length < 5) return;
     const ageGroup = parts[0];
     const eventName = parts[1];
     const genderRaw = parts[2];
     const cnName = parts[3];
     const enName = parts.slice(4).join(" ");
 
-    if (/姓名|项目|组别|age|event/i.test(cnName)) continue;
+    if (/姓名|项目|组别|age|event/i.test(cnName)) return;
+    if (spaceOnly && parts.length > 5 && !/[男女]/.test(genderRaw)) {
+      ambiguous.push(idx + 1);
+    }
     out.push({
       ageGroup,
       eventName,
@@ -251,7 +327,8 @@ function parseRoster(text) {
       cnName,
       enName,
     });
-  }
+  });
+  out.ambiguous = ambiguous;
   return out;
 }
 
@@ -1316,12 +1393,26 @@ function RosterTab({ athletes, groupsMeta, reload }) {
   const [randomize, setRandomize] = useState(true);
   /* 展開中的項目，點標題列切換 */
   const [openGk, setOpenGk] = useState(null);
+  /* 清除評分紀錄的確認視窗與結果訊息 */
+  const [confirmScores, setConfirmScores] = useState(false);
+  const [scoreMsg, setScoreMsg] = useState("");
 
   const doImport = async () => {
     setBusy(true);
     const parsed = parseRoster(text);
     if (parsed.length === 0) {
       setMsg("沒有解析到有效資料，請檢查格式");
+      setBusy(false);
+      return;
+    }
+    /* 用空白分隔又看不出性別欄的行：項目名很可能含空白被拆開了
+       （「国际第一套 - 南拳」）。這種情況停下來問，不要匯入錯的欄位。 */
+    if (parsed.ambiguous && parsed.ambiguous.length) {
+      const rows = parsed.ambiguous.slice(0, 5).join("、");
+      setMsg(
+        `第 ${rows}${parsed.ambiguous.length > 5 ? " 等" : ""} 行的欄位看不出性別，` +
+          `項目名稱可能含有空白而被拆開。請改用 Tab 或逗號分隔後再匯入（從 Excel 複製整欄就是 Tab）。`
+      );
       setBusy(false);
       return;
     }
@@ -1435,6 +1526,25 @@ function RosterTab({ athletes, groupsMeta, reload }) {
     reload();
   };
 
+  /* 清除評分紀錄，名單與場地設定保留：測試完要把分數歸零、正式比賽重跑同
+     一份名單時用。順便把「已完成」倒回待跑並關掉開啟中的項目，否則分數
+     沒了、看板卻還顯示整場都評完。 */
+  const clearScores = async () => {
+    setConfirmScores(false);
+    setBusy(true);
+    setScoreMsg("");
+    const { ok, removed } = await clearAllScores({ alsoResetQueues: true });
+    setBusy(false);
+    setScoreMsg(
+      ok
+        ? removed
+          ? `已清除 ${removed} 筆評分紀錄，名單與場地設定保留。`
+          : "沒有找到任何評分紀錄。"
+        : "清除失敗，請檢查網路後再試一次（詳細原因見瀏覽器 Console）。"
+    );
+    reload();
+  };
+
   const byGroupCount = {};
   athletes.forEach((a) => {
     const k = groupKeyOf(a);
@@ -1454,6 +1564,11 @@ function RosterTab({ athletes, groupsMeta, reload }) {
           }}
         >
           從 Excel 複製整欄貼上即可（Tab 或逗號分隔），每行 5 個欄位，順序為：
+          <br />
+          <span style={{ color: C.textFaint, fontSize: 12 }}>
+            項目名稱含有空白（例如「国际第一套 - 南拳」）時，務必用 Tab
+            或逗號分隔，純用空白會把名稱拆開。
+          </span>
           <br />
           <span style={{ color: C.gold, fontFamily: FONT_MONO, fontSize: 12 }}>
             年齡組 項目 組別 中文姓名 英文姓名
@@ -1525,7 +1640,20 @@ function RosterTab({ athletes, groupsMeta, reload }) {
           <Btn variant="danger" onClick={() => setConfirmOpen(true)}>
             <Trash2 size={14} /> 清空名單
           </Btn>
+          <Btn
+            variant="danger"
+            onClick={() => setConfirmScores(true)}
+            disabled={busy}
+            title="只刪分數，名單與場地設定保留"
+          >
+            <RefreshCw size={14} /> 清除評分紀錄
+          </Btn>
         </div>
+        {scoreMsg && (
+          <div style={{ marginTop: 10, color: C.gold, fontSize: 13 }}>
+            {scoreMsg}
+          </div>
+        )}
         {msg && (
           <div style={{ marginTop: 10, color: C.gold, fontSize: 13 }}>
             {msg}
@@ -1603,6 +1731,12 @@ function RosterTab({ athletes, groupsMeta, reload }) {
           );
         })}
       </div>
+      <Confirm
+        open={confirmScores}
+        text="確定要清除所有評分紀錄嗎？所有裁判分數與裁判長加分都會被刪除，場地的「已完成」會倒回待跑。名單、出場序與場地設定不受影響。此動作無法復原。"
+        onYes={clearScores}
+        onNo={() => setConfirmScores(false)}
+      />
       <Confirm
         open={confirmOpen}
         text="確定要清空所有名單與項目資料嗎？此動作無法復原（裁判評分紀錄不會被刪除）。"
