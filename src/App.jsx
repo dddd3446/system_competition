@@ -4057,6 +4057,12 @@ function ScoreEntry({
     ? `bonus:${groupKey}`
     : `score:${groupKey}:${judgeId}`;
 
+  /* 500ms 去抖期間項目可能已經被結束（自動接續或總控台換組）。那時候才
+     落地的寫入會改到一個已完成的組，而且畫面不會有任何提示——測試報告
+     5d 的第二項。meta 由上層的 sWatch 即時推過來，所以用 ref 讀最新值。 */
+  const openRef = useRef(true);
+  openRef.current = !!(meta && meta.open);
+
   useEffect(() => {
     let cancelled = false;
     getJSON(storeKey, {}).then((v) => {
@@ -4096,23 +4102,41 @@ function ScoreEntry({
     ? groupAthletes.filter((a) => spreadOf(a.id).needsMeeting).map((a) => a.cnName)
     : [];
 
+  /* 一位選手一次寫入，不整張表覆蓋。
+     原本是 setJSON(storeKey, next)：把畫面上的整張 {選手ID: 分數} 覆蓋回雲端。
+     values 只在進入該組時讀一次，之後不跟雲端同步，所以同一位裁判在畫面
+     還沒更新前連改兩位選手時，後送出的那次會用舊的表把前一位的分數蓋掉
+     （測試中 32 位選手的分數就是這樣消失的）。改成只寫自己那個欄位，
+     兩次寫入碰不到彼此，順序也不再有影響。 */
   const onChangeVal = (athleteId, raw) => {
     const cleanDigits = raw.replace(/[^0-9]/g, "");
-    const next = { ...values };
-    if (cleanDigits === "") {
-      /* 清空也要存回雲端，否則畫面空了、雲端還留著舊分數，仍算已送出 */
-      delete next[athleteId];
-    } else {
+    let val = null;
+    if (cleanDigits !== "") {
       const num = parseInt(cleanDigits, 10) / 100;
-      next[athleteId] = num > scaleMax ? scaleMax : num;
+      val = num > scaleMax ? scaleMax : num;
     }
-    setValues(next);
+    setValues((prev) => {
+      const next = { ...prev };
+      if (val === null) delete next[athleteId];
+      else next[athleteId] = val;
+      return next;
+    });
     setSaving((s) => ({ ...s, [athleteId]: "typing" }));
     clearTimeout(timers.current[athleteId]);
     timers.current[athleteId] = setTimeout(async () => {
-      await setJSON(storeKey, next);
-      setSaving((s) => ({ ...s, [athleteId]: "saved" }));
-      setTimeout(() => setSaving((s) => ({ ...s, [athleteId]: null })), 1200);
+      /* 組別已結束就不要再寫，改成提示裁判這一筆沒有送出。 */
+      if (!openRef.current) {
+        setSaving((s) => ({ ...s, [athleteId]: "closed" }));
+        return;
+      }
+      /* 清空＝刪掉那個葉節點，不是寫 null 進整張表。 */
+      const ok =
+        val === null
+          ? await sDel(`${storeKey}/${athleteId}`)
+          : await sUpdate(storeKey, { [athleteId]: val });
+      setSaving((s) => ({ ...s, [athleteId]: ok ? "saved" : "error" }));
+      if (ok)
+        setTimeout(() => setSaving((s) => ({ ...s, [athleteId]: null })), 1200);
     }, 500);
   };
 
@@ -4197,14 +4221,33 @@ function ScoreEntry({
                   borderColor: isChief ? C.goldDim : C.border,
                 }}
               />
+              {/* 原本不管有沒有送出都印「已存」，只用顏色區分（未送出時
+                  是透明的），裁判會以為已經送出了——測試報告問題 4。
+                  改成各狀態各自的字，沒有狀態才留空白佔位。 */}
               <span
                 style={{
                   fontSize: 10,
-                  width: 30,
-                  color: saving[a.id] === "saved" ? C.green : "transparent",
+                  width: 38,
+                  lineHeight: 1.3,
+                  color:
+                    saving[a.id] === "saved"
+                      ? C.green
+                      : saving[a.id] === "typing"
+                      ? C.textFaint
+                      : saving[a.id] === "error" || saving[a.id] === "closed"
+                      ? "#E08A7C"
+                      : "transparent",
                 }}
               >
-                已存
+                {saving[a.id] === "saved"
+                  ? "已存"
+                  : saving[a.id] === "typing"
+                  ? "存…"
+                  : saving[a.id] === "error"
+                  ? "失敗"
+                  : saving[a.id] === "closed"
+                  ? "已結束"
+                  : "—"}
               </span>
             </div>
             {isChief && (
@@ -4815,9 +4858,12 @@ async function exportResultsXlsx(groupsMeta, venuesConfig, athletes) {
        第二欄只有 12 會被切掉）。不另開一列，因為主辦方的模板是照列數對的，
        多一列會打亂「標題列之後就是選手」。翻不出來的項目英文留空。 */
     const titleEn = groupTitleEn(meta);
+    /* 沒收齊的項目在標題列標出來。測試時有 11 位選手因為分數被蓋掉而
+       沒有成績，匯出與看板都沒有任何提示，只能靠即時監看一組一組看。 */
+    const missing = pending.length;
     rows.push([
       `${meta.ageGroup} ${meta.eventName}-${gender}`,
-      "",
+      missing ? `⚠ 缺 ${missing} 人成績` : "",
       titleEn || "",
     ]);
     /* 同分並列時照排列順序給牌，不看名次 */
