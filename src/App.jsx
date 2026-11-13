@@ -366,8 +366,16 @@ async function computeGroupResults(groupKey, meta, venue, athletesAll) {
 /* 一個項目是否「完全評完」＝每位選手都收齊全部裁判的分數，且裁判長加分也
    都填了。computeGroupResults 回傳的 r.bonus 在沒填時是 null，所以
    typeof r.bonus === "number" 就等於「有加分」，不必再讀一次 bonus key。 */
-function isGroupFullyComplete(results) {
+/* expectedCount＝meta.athleteIds 的人數。少了它，「收齊」是拿「手上有幾位
+   選手」去比，而不是「這組報名了幾位」：總控台的 athletes 是 loadAll() 的
+   一次性快照，不是 sWatch，所以別台裝置剛匯入／剛改名單時，這裡可能只看到
+   一部分選手。那一部分如果剛好都評完了，every() 就會回 true，項目就在分數
+   還沒收齊時被自動接續結束掉。 */
+function isGroupFullyComplete(results, expectedCount) {
   if (!results || results.length === 0) return false;
+  /* 手上的選手數跟報名數不符就是資料還沒同步完，一律不算完成。 */
+  if (typeof expectedCount === "number" && results.length !== expectedCount)
+    return false;
   return results.every((r) => r.complete && typeof r.bonus === "number");
 }
 
@@ -380,12 +388,18 @@ async function fetchGroupCompletion(gk, meta, venue, athletesAll) {
     (n, r) => n + r.submittedCount + (typeof r.bonus === "number" ? 1 : 0),
     0
   );
-  const expected = results.length * (venue.judgeCount + 1);
+  /* 分母照報名人數算，不是照手上拿到的選手數，否則名單沒同步完時
+     「9/9 已評」會在實際還缺人的情況下顯示成已收齊。 */
+  const roster = (meta.athleteIds || []).length;
+  const headcount = Math.max(results.length, roster);
+  const expected = headcount * (venue.judgeCount + 1);
   return {
     results,
-    complete: isGroupFullyComplete(results),
+    complete: isGroupFullyComplete(results, roster || undefined),
     submitted,
     expected,
+    /* 名單沒同步完（手上的人比報名的少）時標記出來，給畫面提示用。 */
+    rosterGap: roster > 0 && results.length < roster ? roster - results.length : 0,
   };
 }
 
@@ -961,6 +975,12 @@ function AdminConsole({ onBack }) {
   useEffect(() => {
     loadAll();
   }, [loadAll]);
+
+  /* 名單改用即時監聽：自動接續要靠它判斷「這組報名了幾位」，用 loadAll 的
+     一次性快照的話，別台裝置剛匯入或剛調整名單時這裡會是舊的，項目就可能
+     在分數還沒收齊時被判定完成。匯入後的 reload() 照舊，這裡只是多一層
+     保險，兩者寫的是同一個 state。 */
+  useEffect(() => sWatch("athletes", (v) => setAthletes(v || [])), []);
 
   /* 掛在總控台層級，切分頁不會中斷自動接續。 */
   const engine = useQueueEngine({
@@ -2299,6 +2319,18 @@ function useQueueEngine({ groupsMeta, setGroupsMeta, venuesConfig, athletes, ena
           if (venueQueue(queuesRef.current, vid).order[0] !== gk) return;
           const mm = metaRef.current[gk];
           if (!mm || !mm.open) return;
+          /* 真正要接續前再確認一次，而且是重讀雲端的分數，不吃 st 這份
+             1.5 秒前算出來的快照：這 1.5 秒內名單可能才同步進來，或裁判
+             才撤回一個分數。自動接續是不可逆的（項目會被標成完成並換下
+             一組），所以寧可多讀一次。 */
+          const recheck = await fetchGroupCompletion(gk, mm, venue, athletes);
+          if (!active) return;
+          const stillComplete =
+            recheck.complete || (mm.athleteIds || []).length === 0;
+          if (!stillComplete) {
+            setHeadStatus((prev) => ({ ...prev, [vid]: { gk, ...recheck } }));
+            return;
+          }
           advancingRef.current[key] = true;
           try {
             await commit({ type: "advance", venueId: vid });
@@ -2883,6 +2915,9 @@ function VenueColumn({
         >
           首位進度 {stMatches.submitted}/{stMatches.expected}
           {stMatches.complete ? " · 已收齊" : ""}
+          {stMatches.rosterGap > 0
+            ? ` · 名單同步中，還差 ${stMatches.rosterGap} 位`
+            : ""}
         </div>
       )}
       <SortableList items={queue.order} dndOn={dndOn}>
