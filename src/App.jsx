@@ -271,6 +271,20 @@ async function clearAllScores({ alsoResetQueues } = {}) {
   return { ok, removed: keys.length };
 }
 
+/* 把某一位選手的分數清掉，讓裁判重打：刪掉每位裁判對他的分數，
+   連同裁判長對他的加分。一次 multi-path update，所以裁判端與大螢幕的
+   sWatch 會在同一個 callback 看到結果，不會閃出「只剩一位裁判有分」的
+   中間狀態。項目本身的開啟狀態與其他選手完全不碰。 */
+async function resetAthleteScores(gk, venue, athleteId) {
+  const patch = {};
+  (venue?.judges || []).forEach((j) => {
+    patch[`score:${gk}:${j.id}/${athleteId}`] = null;
+  });
+  patch[`bonus:${gk}/${athleteId}`] = null;
+  if (!Object.keys(patch).length) return false;
+  return sUpdateRoot(patch);
+}
+
 /* ------------------------------------------------------------------ */
 /* Domain helpers                                                     */
 /* ------------------------------------------------------------------ */
@@ -459,7 +473,11 @@ function isGroupFullyComplete(results, expectedCount) {
   /* 手上的選手數跟報名數不符就是資料還沒同步完，一律不算完成。 */
   if (typeof expectedCount === "number" && results.length !== expectedCount)
     return false;
-  return results.every((r) => r.complete && typeof r.bonus === "number");
+  /* 分差超過 0.5 的選手要先開評審會議、由裁判重新打分，裁判長的加分欄
+     也被鎖住，所以這組還不算評完，不能自動接續跳到下一組。 */
+  return results.every(
+    (r) => r.complete && typeof r.bonus === "number" && !r.needsMeeting
+  );
 }
 
 /* 取得項目的完成狀態。submitted/expected 用來顯示「9/12 已評」這種即時進度，
@@ -486,76 +504,125 @@ async function fetchGroupCompletion(gk, meta, venue, athletesAll) {
   };
 }
 
+/* 最佳運動員。
+   規則（主辦方 2026-11）：
+     - 分組：U7–U9 一組、U10–U12 一組，兩組各自再分男女 → 共 4 份名單。
+     - 每人取所有參賽項目中「最高 3 項」的成績相加，不除以 3。
+     - 單項成績就是該項目的最終得分（三位裁判平均＋裁判長加分；5 位裁判的
+       場地去頭去尾取中間 3 個，與系統其他地方同一套規則）。
+     - 團體項目不列入（EXCLUDED_BEST_EVENTS）。
+     - 分數沒收齊的項目不算進去。
+     - 同分時比最高單項，再比第二項、第三項。
+   不滿 3 項的人照實加總，不特別處理，總分自然較低。
+   年齡組不屬於上面兩組的人（例如成人組、U13 以上）不列入，但會回報人數，
+   畫面上要標出來，避免像測試時那樣有人靜悄悄少掉。 */
+const BEST_DIVISIONS = [
+  { id: "U7-U9", label: "U7–U9", min: 0, max: 9 },
+  { id: "U10-U12", label: "U10–U12", min: 10, max: 12 },
+];
+const EXCLUDED_BEST_EVENTS = ["自選集體", "自选集体"];
+const BEST_TOP_N = 3;
+
+/* 從年齡組取出歲數上限：「U12」「12歲以下」「10至12歲」→ 12。
+   取不到就回 null（那位選手不列入任何一組）。 */
+function ageGroupMax(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  const nums = s.match(/\d+/g);
+  if (!nums || !nums.length) return null;
+  return Math.max(...nums.map(Number));
+}
+
+function bestDivisionOf(ageGroup) {
+  const n = ageGroupMax(ageGroup);
+  if (n === null) return null;
+  return BEST_DIVISIONS.find((d) => n >= d.min && n <= d.max) || null;
+}
+
 async function computeBestAthletes(groupsMeta, venuesConfig, athletesAll) {
-  const stats = {};
+  /* 同一個人在每個項目都是不同的選手 id，所以跨項目用「中文名＋英文名」
+     配對。名字打錯字會被當成兩個人——這是改名功能要存在的原因之一。 */
+  const people = {};
+  /* 年齡組無法分類而被略過的人（用同一把 key 去重），回報給畫面。 */
+  const skipped = new Set();
 
-  // 1. 先從總選手名單或各組統計每位選手報名了哪些項目（支援尚未有分數的選手）
-  athletesAll.forEach((a) => {
-    const idKey = `${a.cnName}__${a.enName}__${a.gender}`;
-    if (!stats[idKey]) {
-      stats[idKey] = {
-        cnName: a.cnName,
-        enName: a.enName,
-        gender: a.gender,
-        events: [],
-      };
-    }
-  });
-
-  // 2. 走訪所有群組，將有參與該組的選手及成績（若有）記錄下來
   for (const [gk, meta] of Object.entries(groupsMeta)) {
-    const venue = venuesConfig.venues.find((v) => v.id === meta.venueId);
-    // 即使還沒有 venue 或還沒打分，我們也能從 meta.athleteIds 知道選手報名了這項
+    if (EXCLUDED_BEST_EVENTS.includes(String(meta.eventName || "").trim()))
+      continue;
     const groupAthletes = athletesAll.filter((a) =>
       meta.athleteIds?.includes(a.id)
     );
+    if (!groupAthletes.length) continue;
 
-    // 嘗試抓取該組已有的結果
-    let results = [];
-    if (venue) {
-      results = (await computeGroupResults(gk, meta, venue, athletesAll)) || [];
+    const division = bestDivisionOf(meta.ageGroup);
+    if (!division) {
+      groupAthletes.forEach((a) =>
+        skipped.add(`${a.cnName}__${a.enName}__${a.gender}`)
+      );
+      continue;
     }
 
-    groupAthletes.forEach((a) => {
-      const idKey = `${a.cnName}__${a.enName}__${a.gender}`;
-      if (!stats[idKey]) {
-        stats[idKey] = {
-          cnName: a.cnName,
-          enName: a.enName,
-          gender: a.gender,
-          events: [],
-        };
-      }
+    /* 沒排進場地的項目算不出成績，當成「這項沒分數」跳過即可。 */
+    const venue = venuesConfig.venues.find((v) => v.id === meta.venueId);
+    if (!venue) continue;
+    const results =
+      (await computeGroupResults(gk, meta, venue, athletesAll)) || [];
+
+    for (const a of groupAthletes) {
       const r = results.find((res) => res.athlete.id === a.id);
-      stats[idKey].events.push({
+      /* 分數沒收齊（r.final 為 null）就不列入這個人的項目清單。 */
+      if (!r || r.final === null) continue;
+      const key = `${division.id}|${a.gender}|${a.cnName}|${a.enName}`;
+      people[key] = people[key] || {
+        division: division.id,
+        divisionLabel: division.label,
+        gender: a.gender,
+        cnName: a.cnName,
+        enName: a.enName,
+        events: [],
+      };
+      people[key].events.push({
         groupKey: gk,
-        label: `${meta.ageGroup} ${meta.eventName} ${meta.gender}`,
-        final: r && r.final !== null ? r.final : null,
+        label: `${meta.ageGroup} ${meta.eventName}`,
+        score: r.final,
       });
+    }
+  }
+
+  /* 每人取最高 3 項相加。final 已經是 2 位小數定案的值，所以直接相加就等於
+     「每項先四捨五入再加」，加出來的總分跟看板上逐項看到的數字對得起來。 */
+  const buckets = {};
+  for (const p of Object.values(people)) {
+    const sorted = [...p.events].sort((x, y) => y.score - x.score);
+    const top = sorted.slice(0, BEST_TOP_N);
+    const total = +top.reduce((sum, e) => sum + e.score, 0).toFixed(2);
+    const bucketKey = `${p.division}|${/男/.test(p.gender) ? "male" : "female"}`;
+    (buckets[bucketKey] = buckets[bucketKey] || []).push({
+      cnName: p.cnName,
+      enName: p.enName,
+      gender: p.gender,
+      divisionLabel: p.divisionLabel,
+      total,
+      top,
+      scoredCount: p.events.length,
     });
   }
 
-  // 3. 過濾出參加 3 項或以上的選手
-  const qualified = Object.values(stats)
-    .filter((s) => s.events.length >= 3)
-    .map((s) => {
-      const scoredEvents = s.events.filter((e) => e.final !== null);
-      const sum = scoredEvents.reduce((acc, e) => acc + e.final, 0);
-      /* 同樣以 2 位小數定案：最佳運動員的名次也是看這個數字排的，
-         存 3 位會出現「畫面同分、名次不同」。 */
-      const avg =
-        scoredEvents.length > 0 ? +(sum / scoredEvents.length).toFixed(2) : 0;
-      return { ...s, avg, scoredCount: scoredEvents.length };
-    });
+  /* 總分高者在前；同分時依序比最高單項、第二項、第三項。 */
+  const cmp = (x, y) =>
+    y.total - x.total ||
+    (y.top[0]?.score ?? 0) - (x.top[0]?.score ?? 0) ||
+    (y.top[1]?.score ?? 0) - (x.top[1]?.score ?? 0) ||
+    (y.top[2]?.score ?? 0) - (x.top[2]?.score ?? 0) ||
+    String(x.cnName).localeCompare(String(y.cnName), "zh-Hant");
+  Object.values(buckets).forEach((list) => list.sort(cmp));
 
-  // 排序：依據已有成績的平均分由高到低（若分數相同或皆無則依姓名）
-  const male = qualified
-    .filter((s) => /男/.test(s.gender))
-    .sort((a, b) => b.avg - a.avg);
-  const female = qualified
-    .filter((s) => /女/.test(s.gender))
-    .sort((a, b) => b.avg - a.avg);
-  return { male, female };
+  return {
+    divisions: BEST_DIVISIONS,
+    /* buckets 的 key 是 "<分組id>|male" / "<分組id>|female" */
+    buckets,
+    skippedCount: skipped.size,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -3600,7 +3667,7 @@ function GroupPicker({ groupKeys, groupsMeta, value, onChange }) {
   );
 }
 
-function ResultsTable({ results, venue, scaleMax }) {
+function ResultsTable({ results, venue, scaleMax, onReset, resetting }) {
   if (!results) return null;
   return (
     <div style={{ overflowX: "auto" }}>
@@ -3626,6 +3693,7 @@ function ResultsTable({ results, venue, scaleMax }) {
             <th style={th}>總分</th>
             <th style={th}>名次</th>
             <th style={th}>狀態</th>
+            {onReset && <th style={th}>重打</th>}
           </tr>
         </thead>
         <tbody>
@@ -3719,6 +3787,22 @@ function ResultsTable({ results, venue, scaleMax }) {
                   </Badge>
                 )}
               </td>
+              {onReset && (
+                <td style={td}>
+                  {/* 清掉這位選手的所有分數，裁判端馬上會看到空白可以重打，
+                      裁判長對他的加分也一併清掉。分差超過 0.5 時最常用。 */}
+                  <Btn
+                    size="sm"
+                    variant="ghost"
+                    disabled={resetting === r.athlete.id}
+                    onClick={() => onReset(r.athlete)}
+                    title={`清掉 ${r.athlete.cnName} 的分數，讓裁判重打`}
+                    style={{ color: "#E08A7C", padding: "4px 8px" }}
+                  >
+                    <RefreshCw size={12} />
+                  </Btn>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -3740,6 +3824,9 @@ function MonitorTab({ groupKeys, groupsMeta, venuesConfig, athletes }) {
   const [gk, setGk] = useState("");
   const [groupResultsMap, setGroupResultsMap] = useState({});
   const [busy, setBusy] = useState(false);
+  /* 要清分數的選手（先確認再動手），與正在清的選手 id */
+  const [confirmReset, setConfirmReset] = useState(null);
+  const [resetting, setResetting] = useState(null);
 
   const refresh = useCallback(async () => {
     setBusy(true);
@@ -3847,7 +3934,14 @@ function MonitorTab({ groupKeys, groupsMeta, venuesConfig, athletes }) {
                   ({venue.name})
                 </span>
               </div>
-              <ResultsTable results={results} venue={venue} />
+              <ResultsTable
+                results={results}
+                venue={venue}
+                resetting={resetting}
+                onReset={(athlete) =>
+                  setConfirmReset({ gk: k, venue, meta, athlete })
+                }
+              />
             </Card>
           );
         })}
@@ -3855,6 +3949,26 @@ function MonitorTab({ groupKeys, groupsMeta, venuesConfig, athletes }) {
           <div style={{ color: C.textFaint, fontSize: 13 }}>尚無項目資料</div>
         )}
       </div>
+      <Confirm
+        open={!!confirmReset}
+        text={
+          confirmReset
+            ? `確定要清掉「${confirmReset.athlete.cnName}」在「${confirmReset.meta.eventName}」的分數嗎？` +
+              `${confirmReset.venue.judges.length} 位裁判對他的分數與裁判長加分都會被清空，` +
+              `裁判端會立刻看到空白可以重打。其他選手不受影響。此動作無法復原。`
+            : ""
+        }
+        onYes={async () => {
+          const c = confirmReset;
+          setConfirmReset(null);
+          setResetting(c.athlete.id);
+          const ok = await resetAthleteScores(c.gk, c.venue, c.athlete.id);
+          setResetting(null);
+          if (!ok) console.error("[重打] 清除分數失敗", c.gk, c.athlete.id);
+          refresh();
+        }}
+        onNo={() => setConfirmReset(null)}
+      />
     </div>
   );
 }
@@ -3893,15 +4007,47 @@ function RankingTab({ groupKeys, groupsMeta, venuesConfig, athletes }) {
       : C.textFaint;
   const activeKeys = gk ? [gk] : groupKeys;
 
+  const [exporting, setExporting] = useState(false);
+  /* 匯出一律是全部項目，不跟下拉選單走；重讀最新分數而不是用畫面上的結果。 */
+  const onExport = async () => {
+    setExporting(true);
+    try {
+      await exportResultsXlsx(groupsMeta, venuesConfig, athletes);
+    } catch (e) {
+      console.error("[匯出] 失敗", e);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div>
       <SectionTitle eyebrow="Result" title="項目排名結果" icon={BarChart3} />
-      <GroupPicker
-        groupKeys={groupKeys}
-        groupsMeta={groupsMeta}
-        value={gk}
-        onChange={setGk}
-      />
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          alignItems: "flex-start",
+          marginBottom: 4,
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <GroupPicker
+            groupKeys={groupKeys}
+            groupsMeta={groupsMeta}
+            value={gk}
+            onChange={setGk}
+          />
+        </div>
+        <Btn
+          onClick={onExport}
+          disabled={exporting || groupKeys.length === 0}
+          style={{ whiteSpace: "nowrap", flexShrink: 0 }}
+          title="匯出全部項目的成績，不受上方選單影響"
+        >
+          <Download size={15} /> {exporting ? "匯出中…" : "匯出 Excel"}
+        </Btn>
+      </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
         {activeKeys.map((k) => {
@@ -4005,7 +4151,7 @@ function BestTab({ groupsMeta, venuesConfig, athletes }) {
       </div>
       {items.length === 0 && (
         <div style={{ color: C.textFaint, fontSize: 13, marginBottom: 20 }}>
-          暫無符合資格（需參加 3 項以上）的選手
+          這一組還沒有已評分的選手
         </div>
       )}
       <div
@@ -4046,21 +4192,15 @@ function BestTab({ groupsMeta, venuesConfig, athletes }) {
                 </span>
               </div>
               <ScoreDigits
-                value={s.scoredCount > 0 ? s.avg : null}
+                value={s.total}
                 size={20}
                 color={i === 0 ? C.gold : C.text}
               />
             </div>
             <div style={{ color: C.textFaint, fontSize: 11.5, marginTop: 6 }}>
-              已報名 {s.events.length} 項（已完成評分 {s.scoredCount} 項）：
-              {s.events
-                .map(
-                  (e) =>
-                    `${e.label} ${
-                      e.final !== null ? `(${e.final})` : "(未評分)"
-                    }`
-                )
-                .join("、")}
+              {/* 只列計入總分的那幾項，並標出總共有幾項已評分。 */}
+              取最高 {s.top.length} 項（共 {s.scoredCount} 項已評分）：
+              {s.top.map((e) => `${e.label} (${e.score.toFixed(2)})`).join("、")}
             </div>
           </Card>
         ))}
@@ -4071,9 +4211,11 @@ function BestTab({ groupsMeta, venuesConfig, athletes }) {
   return (
     <div>
       <SectionTitle eyebrow="Overall" title="最佳運動員" icon={Trophy} />
-      <div style={{ color: C.textMuted, fontSize: 13, marginBottom: 14 }}>
-        取參加 3
-        項或以上項目的選手（即使尚未有分數也會列出資格），各項總分平均，男女分開計算。
+      <div style={{ color: C.textMuted, fontSize: 13, marginBottom: 14, lineHeight: 1.6 }}>
+        U7–U9、U10–U12 兩個年齡分組，各自再分男女。每人取所有參賽項目中
+        <strong style={{ color: C.text }}>最高 3 項的成績相加</strong>
+        （不除以 3），分數還沒收齊的項目不計入，團體項目不列入。
+        同分時依序比最高單項、第二項、第三項。
       </div>
       <Btn
         variant="primary"
@@ -4083,10 +4225,39 @@ function BestTab({ groupsMeta, venuesConfig, athletes }) {
       >
         <RefreshCw size={15} /> {busy ? "計算中…" : "重新整理"}
       </Btn>
+      {data && data.skippedCount > 0 && (
+        <Card
+          style={{
+            padding: 12,
+            marginBottom: 16,
+            borderColor: C.redDim,
+            background: "#2A1712",
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+          }}
+        >
+          <AlertTriangle size={16} color="#F0A08C" style={{ flexShrink: 0 }} />
+          <span style={{ color: "#F0A08C", fontSize: 12.5, lineHeight: 1.5 }}>
+            有 {data.skippedCount} 位選手的年齡組不屬於 U7–U9 或 U10–U12
+            （例如成人組、U13 以上），未列入最佳運動員。
+          </span>
+        </Card>
+      )}
       {data && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 10 }}>
-          <List items={data.male} label="男子組 最佳運動員資格名單" />
-          <List items={data.female} label="女子組 最佳運動員資格名單" />
+          {data.divisions.map((d) => (
+            <React.Fragment key={d.id}>
+              <List
+                items={data.buckets[`${d.id}|male`] || []}
+                label={`${d.label} 男子 最佳運動員`}
+              />
+              <List
+                items={data.buckets[`${d.id}|female`] || []}
+                label={`${d.label} 女子 最佳運動員`}
+              />
+            </React.Fragment>
+          ))}
         </div>
       )}
     </div>
@@ -4372,6 +4543,9 @@ function ScoreEntry({
      （測試中 32 位選手的分數就是這樣消失的）。改成只寫自己那個欄位，
      兩次寫入碰不到彼此，順序也不再有影響。 */
   const onChangeVal = (athleteId, raw) => {
+    /* 鎖定中的選手不接受輸入。disabled 已經擋住 UI，這裡是第二道：
+       分差是即時監聽算出來的，畫面可能比資料慢一步。 */
+    if (isChief && spreadOf(athleteId).needsMeeting) return;
     const cleanDigits = raw.replace(/[^0-9]/g, "");
     let val = null;
     if (cleanDigits !== "") {
@@ -4473,7 +4647,16 @@ function ScoreEntry({
                 inputMode="numeric"
                 value={displayVal}
                 onChange={(e) => onChangeVal(a.id, e.target.value)}
-                placeholder="—"
+                /* 分差超過 0.5 時鎖住裁判長這一位選手的加分欄：必須先讓
+                   裁判重新打分、分差回到 0.5 以內才解鎖。只鎖這一位，
+                   同組其他選手照常輸入。 */
+                disabled={meeting}
+                title={
+                  meeting
+                    ? "裁判分差超過 0.5，請先請裁判重新打分"
+                    : undefined
+                }
+                placeholder={meeting ? "鎖定" : "—"}
                 style={{
                   ...inputStyle,
                   width: 92,
@@ -4481,7 +4664,9 @@ function ScoreEntry({
                   fontFamily: FONT_MONO,
                   fontSize: 18,
                   fontWeight: 700,
-                  borderColor: isChief ? C.goldDim : C.border,
+                  borderColor: meeting ? C.red : isChief ? C.goldDim : C.border,
+                  opacity: meeting ? 0.55 : 1,
+                  cursor: meeting ? "not-allowed" : undefined,
                 }}
               />
               {/* 原本不管有沒有送出都印「已存」，只用顏色區分（未送出時
@@ -4948,95 +5133,99 @@ function VenueDisplay({ venueId, onBack }) {
 /* ------------------------------------------------------------------ */
 /* 項目英文名（匯出 Excel 用）                                          */
 /* ------------------------------------------------------------------ */
-/* 名單只有 5 欄，沒有項目英文，所以這裡放一張中→英對照表，匯出時自動組出
-   英文標題。項目名是組合字（「传统太极长器械」＝传统＋太极＋长器械），
-   逐詞比對會拆錯，所以用「最長詞優先」掃過整個字串：每個位置都先試最長的
-   詞，對到就吃掉往後走。沒對到的字留著不翻，整個項目若有一個字沒對到就
-   只輸出中文，寧可少一行英文也不要給出半中半英的標題。
-   简体、繁體都列，因為名單兩種都可能貼進來。 */
+/* 格式照主辦方提供的對照表：「U12 Male Basic Chang Quan」
+   ＝ 年齡組 + 性別 + 項目，詞與詞之間空一格（Chang Quan 不是 Changquan）。
+
+   項目名是組合字（傳統太極短器械 ＝ 傳統太極 + 短器械），所以用「最長詞
+   優先」掃過整個字串，不必把每種組合都列出來。有一個詞不認識就整個放棄、
+   英文留空，不輸出半中半英的標題。简体繁體都列，名單兩種都可能貼進來。 */
 const EVENT_EN = {
+  /* 等級／類型。放在前面只是分類，實際比對一律最長詞優先。 */
+  國際第一套: "International 1st Routine",
+  国际第一套: "International 1st Routine",
+  傳統北派: "Traditional Northern Style",
+  传统北派: "Traditional Northern Style",
+  傳統太極: "Traditional Taiji",
+  传统太极: "Traditional Taiji",
+  傳統: "Traditional",
+  传统: "Traditional",
+  基礎: "Basic",
+  基础: "Basic",
+  初級: "Beginner",
+  初级: "Beginner",
+  中級: "Intermediate",
+  中级: "Intermediate",
+  高級: "Advanced",
+  高级: "Advanced",
+  自選: "Optional",
+  自选: "Optional",
+  規定: "Compulsory",
+  规定: "Compulsory",
+  北派: "Northern Style",
+  南派: "Southern Style",
+  太極: "Taiji",
+  太极: "Taiji",
   /* 拳術 */
-  长拳: "Changquan", 長拳: "Changquan",
-  南拳: "Nanquan",
-  太极拳: "Taijiquan", 太極拳: "Taijiquan",
-  太极: "Taiji", 太極: "Taiji",
-  形意拳: "Xingyiquan", 八卦掌: "Baguazhang",
-  咏春: "Wing Chun", 詠春: "Wing Chun",
-  八极拳: "Bajiquan", 八極拳: "Bajiquan",
-  通背拳: "Tongbeiquan", 螳螂拳: "Praying Mantis",
-  醉拳: "Drunken Fist", 地趟拳: "Ditangquan",
-  查拳: "Chaquan", 华拳: "Huaquan", 華拳: "Huaquan",
-  炮拳: "Paoquan", 洪拳: "Hungquan",
-  蔡李佛: "Choy Li Fut",
-  五祖拳: "Wuzuquan", 白鶴拳: "White Crane", 白鹤拳: "White Crane",
-  象形拳: "Imitation Boxing",
-  猴拳: "Monkey Fist", 鹰爪: "Eagle Claw", 鷹爪: "Eagle Claw",
-  少林: "Shaolin", 武当: "Wudang", 武當: "Wudang",
-  咏春拳: "Wing Chun", 詠春拳: "Wing Chun",
-  翻子拳: "Fanziquan", 劈挂拳: "Piguaquan", 劈掛拳: "Piguaquan",
-  绵拳: "Mianquan", 綿拳: "Mianquan",
-  六合拳: "Liuhequan", 心意六合拳: "Xinyi Liuhequan",
-  弹腿: "Tantui", 彈腿: "Tantui",
-  /* 太極流派：式／式太极拳都要能對到 */
-  陈式: "Chen Style", 陳式: "Chen Style",
-  杨式: "Yang Style", 楊式: "Yang Style",
-  吴式: "Wu (Hao) Style", 吳式: "Wu (Hao) Style",
-  孙式: "Sun Style", 孫式: "Sun Style",
-  武式: "Wu Style",
-  式: "Style",
-  自选: "Optional", 自選: "Optional",
-  规定: "Compulsory", 規定: "Compulsory",
-  传统: "Traditional", 傳統: "Traditional",
-  基础: "Basic", 基礎: "Basic",
-  初级: "Elementary", 初級: "Elementary",
-  中级: "Intermediate", 中級: "Intermediate",
-  高级: "Advanced", 高級: "Advanced",
+  長拳: "Chang Quan",
+  长拳: "Chang Quan",
+  南拳: "Nan Quan",
+  太極拳: "Taiji Quan",
+  太极拳: "Taiji Quan",
+  形意拳: "Xingyi Quan",
+  八卦掌: "Bagua Zhang",
+  詠春拳: "Wing Chun",
+  咏春拳: "Wing Chun",
+  螳螂拳: "Praying Mantis",
+  拳術: "Barehand",
+  拳术: "Barehand",
   /* 器械 */
-  长器械: "Long Weapon", 長器械: "Long Weapon",
+  其他器械: "Other Weapon",
   短器械: "Short Weapon",
-  短兵器: "Short Weapon", 长兵器: "Long Weapon", 長兵器: "Long Weapon",
-  双器械: "Double Weapon", 雙器械: "Double Weapon",
-  软器械: "Flexible Weapon", 軟器械: "Flexible Weapon",
+  長器械: "Long Weapon",
+  长器械: "Long Weapon",
+  雙器械: "Double Weapon",
+  双器械: "Double Weapon",
+  軟器械: "Flexible Weapon",
+  软器械: "Flexible Weapon",
+  短兵器: "Short Weapon",
+  長兵器: "Long Weapon",
+  长兵器: "Long Weapon",
   器械: "Weapon",
-  剑术: "Jianshu", 劍術: "Jianshu", 剑: "Jian", 劍: "Jian",
-  刀术: "Daoshu", 刀術: "Daoshu", 刀: "Dao",
-  枪术: "Qiangshu", 槍術: "Qiangshu", 枪: "Qiang", 槍: "Qiang",
-  棍术: "Gunshu", 棍術: "Gunshu", 棍: "Gun",
-  扇: "Fan", 鞭: "Whip", 绳镖: "Rope Dart", 繩鏢: "Rope Dart",
-  双刀: "Double Dao", 雙刀: "Double Dao",
-  双剑: "Double Jian", 雙劍: "Double Jian",
-  三节棍: "Three-Section Staff", 三節棍: "Three-Section Staff",
-  九节鞭: "Nine-Section Whip", 九節鞭: "Nine-Section Whip",
-  大刀: "Great Dao", 朴刀: "Pudao", 戟: "Ji", 钩: "Hook", 鈎: "Hook", 鉤: "Hook",
-  峨眉刺: "Emei Ci", 双钩: "Double Hook", 雙鈎: "Double Hook", 雙鉤: "Double Hook",
-  双鞭: "Double Whip", 雙鞭: "Double Whip",
-  流星锤: "Meteor Hammer", 流星錘: "Meteor Hammer",
-  南刀: "Nandao", 南棍: "Nangun",
-  春秋大刀: "Chunqiu Great Dao",
-  虎头钩: "Tiger Head Hook", 虎頭鈎: "Tiger Head Hook",
-  判官笔: "Panguan Bi", 判官筆: "Panguan Bi",
-  双匕首: "Double Dagger", 雙匕首: "Double Dagger",
-  匕首: "Dagger",
-  短兵: "Short Weapon", 长兵: "Long Weapon", 長兵: "Long Weapon",
-  /* 對抗、其他 */
-  推手: "Push Hands", 散打: "Sanda", 散手: "Sanshou",
-  对练: "Duilian", 對練: "Duilian",
-  徒手: "Barehand", 空手: "Barehand",
-  集体: "Group", 集體: "Group",
-  团体: "Team", 團體: "Team",
-  功力: "Gongli", 气功: "Qigong", 氣功: "Qigong",
-  /* 修飾語 */
-  男子: "Men's", 女子: "Women's",
-  儿童: "Children", 兒童: "Children",
-  成人: "Adult", 青年: "Youth", 少年: "Junior",
-  第一套: "Routine 1", 第二套: "Routine 2", 第三套: "Routine 3",
-  组: "", 組: "", 术: "", 術: "",
-  /* 通用尾字：放在最後，前面的專有名詞（长拳、南拳…）因為較長會先對到。 */
-  项目: "Event", 項目: "Event",
-  拳: "Quan",
+  劍術: "Jian Shu",
+  剑术: "Jian Shu",
+  刀術: "Dao Shu",
+  刀术: "Dao Shu",
+  槍術: "Qiang Shu",
+  枪术: "Qiang Shu",
+  棍術: "Gun Shu",
+  棍术: "Gun Shu",
+  南刀: "Nan Dao",
+  南棍: "Nan Gun",
+  雙刀: "Double Dao",
+  双刀: "Double Dao",
+  雙劍: "Double Jian",
+  双剑: "Double Jian",
+  九節鞭: "Nine-Section Whip",
+  九节鞭: "Nine-Section Whip",
+  三節棍: "Three-Section Staff",
+  三节棍: "Three-Section Staff",
+  扇: "Fan",
+  /* 對抗與團體 */
+  推手: "Push Hands",
+  散打: "Sanda",
+  對練: "Duilian",
+  对练: "Duilian",
+  集體: "Group Routine",
+  集体: "Group Routine",
+  團體: "Team Routine",
+  团体: "Team Routine",
+  /* 尾字：套路／項目這類詞單獨出現時不翻，避免多出一個 Routine。 */
+  套路: "Routine",
+  項目: "Event",
+  项目: "Event",
 };
 
-/* 最長詞優先掃描。全部字元都對到（或是空白／標點）才回傳英文，否則回 null。 */
+/* 最長詞優先掃描。全部字元都對到才回傳英文，否則回 null。 */
 const EVENT_EN_KEYS = Object.keys(EVENT_EN).sort((a, b) => b.length - a.length);
 function eventNameEn(name) {
   const src = String(name || "").trim();
@@ -5045,13 +5234,13 @@ function eventNameEn(name) {
   let i = 0;
   while (i < src.length) {
     const ch = src[i];
-    /* 空白與分隔符號直接跳過；括號內的重量級別（22.5kg）原樣保留。 */
+    /* 空白與連接符號直接跳過（項目名可能寫成「國際第一套 - 南拳」）。 */
     if (/\s|[-·、，,]/.test(ch)) {
       i++;
       continue;
     }
+    /* 括號內原樣保留，例如推手的重量級別（22.5kg）。 */
     if (/[（(]/.test(ch)) {
-      /* 從 i 之後找，不是從頭找：有兩組括號時從頭找會切錯。 */
       let close = -1;
       for (let j = i + 1; j < src.length; j++)
         if (/[）)]/.test(src[j])) {
@@ -5064,7 +5253,7 @@ function eventNameEn(name) {
       i = end + 1;
       continue;
     }
-    /* 數字原樣保留：「24式太极拳」→「24 Style Taijiquan」。 */
+    /* 數字原樣保留：「24式太极拳」→「24 Style Taiji Quan」。 */
     const num = /^\d+/.exec(src.slice(i));
     if (num) {
       out.push(num[0]);
@@ -5072,7 +5261,6 @@ function eventNameEn(name) {
       continue;
     }
     const hit = EVENT_EN_KEYS.find((k) => src.startsWith(k, i));
-    /* 有一個詞不認識就整個放棄，不輸出半中半英的標題。 */
     if (hit === undefined) return null;
     if (EVENT_EN[hit]) out.push(EVENT_EN[hit]);
     i += hit.length;
@@ -5080,16 +5268,40 @@ function eventNameEn(name) {
   return out.length ? out.join(" ") : null;
 }
 
-/* 項目標題的英文版：「U10 Traditional Taiji Long Weapon - Women's」。
-   年齡組（U10、成人組…）原樣保留，數字與 U 開頭的代號不需要翻。 */
+/* 年齡組轉英文。名單裡可能寫「12歲以下」也可能已經是「U12」，兩種都收。
+   推手是合併年齡區間的：「9歲及以下」→「U9 & Below」、
+   「10至12歲」→「U10-U12」。 */
+function ageGroupEn(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  if (/^U\d+$/i.test(s)) return s.toUpperCase();
+  let m = s.match(/^U?(\d+)\s*-\s*U?(\d+)$/i);
+  if (m) return `U${m[1]}-U${m[2]}`;
+  m = s.match(/^(\d+)\s*(?:歲|岁)?\s*(?:及|和)\s*(?:以下|以內|以内)$/);
+  if (m) return `U${m[1]} & Below`;
+  m = s.match(/^(\d+)\s*(?:歲|岁)\s*(?:以下|以內|以内)$/);
+  if (m) return `U${m[1]}`;
+  m = s.match(/^(\d+)\s*(?:至|到|-|~)\s*(\d+)\s*(?:歲|岁)$/);
+  if (m) return `U${m[1]}-U${m[2]}`;
+  m = s.match(/^U(\d+)\s*(?:&|and)\s*below$/i);
+  if (m) return `U${m[1]} & Below`;
+  /* 名單也可能直接寫「U9以下」（有 U、沒有「歲」）。 */
+  m = s.match(/^U(\d+)\s*(?:以下|以內|以内)$/);
+  if (m) return `U${m[1]} & Below`;
+  return null;
+}
+
+const genderEn = (raw) =>
+  /男/.test(raw) ? "Male" : /女/.test(raw) ? "Female" : null;
+
+/* 項目標題的英文版：「U12 Male Basic Chang Quan」。
+   年齡組、性別、項目任一個翻不出來就整個留空，不輸出半套的標題。 */
 function groupTitleEn(meta) {
-  const ev = eventNameEn(meta.eventName);
-  if (!ev) return null;
-  const age = String(meta.ageGroup || "").trim();
-  const ageEn = /^[A-Za-z0-9+\-\s]+$/.test(age) ? age : eventNameEn(age) || age;
-  const g = (meta.gender || "").replace(/[组組]$/, "");
-  const gEn = g ? eventNameEn(g) : null;
-  return [ageEn, ev].filter(Boolean).join(" ") + (gEn ? ` - ${gEn}` : "");
+  const age = ageGroupEn(meta.ageGroup);
+  const gender = genderEn(meta.gender);
+  const event = eventNameEn(meta.eventName);
+  if (age === null || !gender || !event) return null;
+  return [age, gender, event].filter(Boolean).join(" ");
 }
 
 /* ------------------------------------------------------------------ */
@@ -5193,40 +5405,57 @@ async function exportResultsXlsx(groupsMeta, venuesConfig, athletes) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "成績");
 
-  /* 第二張工作表：最佳運動員，規則同總控台的「最佳運動員」分頁（參加 3 項
-     以上，已評項目的最終得分平均）。版面比照成績表：一行標題，底下
-     「名次 | 中文姓名 | 英文姓名 | 平均分 | 已評/報名項數」。 */
+  /* 第二張工作表：最佳運動員，規則同總控台的「最佳運動員」分頁：
+     U7–U9、U10–U12 兩個分組各自分男女，每人取最高 3 項相加。
+     版面：一行標題，底下「名次 | 中文姓名 | 英文姓名 | 總分 | 計入項目」。 */
   const best = await computeBestAthletes(groupsMeta, venuesConfig, athletes);
   const bRows = [];
   const bScoreCells = [];
-  for (const [label, list] of [
-    ["男子最佳運動員", best.male],
-    ["女子最佳運動員", best.female],
-  ]) {
-    if (bRows.length) bRows.push([]);
-    bRows.push([label]);
-    const scored = list.filter((s) => s.scoredCount > 0);
-    const unscored = list.filter((s) => s.scoredCount === 0);
-    let rank = 0;
-    let prev = null;
-    scored.forEach((s, i) => {
-      if (s.avg !== prev) {
-        rank = i + 1;
-        prev = s.avg;
+  for (const d of best.divisions) {
+    for (const [sex, sexLabel] of [
+      ["male", "男子"],
+      ["female", "女子"],
+    ]) {
+      const list = best.buckets[`${d.id}|${sex}`] || [];
+      if (bRows.length) bRows.push([]);
+      bRows.push([`${d.label} ${sexLabel} 最佳運動員`]);
+      if (!list.length) {
+        bRows.push(["", "（這一組還沒有已評分的選手）"]);
+        continue;
       }
-      bScoreCells.push(bRows.length);
-      bRows.push([rank, s.cnName, s.enName, s.avg, `${s.scoredCount}/${s.events.length} 項`]);
-    });
-    unscored.forEach((s) =>
-      bRows.push(["", s.cnName, s.enName, "", `0/${s.events.length} 項`])
-    );
+      /* 同分並列：總分一樣就給同一個名次。 */
+      let rank = 0;
+      let prev = null;
+      list.forEach((sItem, i) => {
+        if (sItem.total !== prev) {
+          rank = i + 1;
+          prev = sItem.total;
+        }
+        bScoreCells.push(bRows.length);
+        bRows.push([
+          rank,
+          sItem.cnName,
+          sItem.enName,
+          sItem.total,
+          sItem.top
+            .map((e) => `${e.label} (${e.score.toFixed(2)})`)
+            .join("、"),
+        ]);
+      });
+    }
+  }
+  if (best.skippedCount > 0) {
+    bRows.push([]);
+    bRows.push([
+      `⚠ 有 ${best.skippedCount} 位選手的年齡組不屬於 U7–U9 或 U10–U12，未列入`,
+    ]);
   }
   const bws = XLSX.utils.aoa_to_sheet(bRows);
   for (const i of bScoreCells) {
     const cell = bws[XLSX.utils.encode_cell({ r: i, c: 3 })];
     if (cell) cell.z = "0.00";
   }
-  bws["!cols"] = [{ wch: 16 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 10 }];
+  bws["!cols"] = [{ wch: 26 }, { wch: 12 }, { wch: 26 }, { wch: 10 }, { wch: 60 }];
   XLSX.utils.book_append_sheet(wb, bws, "最佳運動員");
 
   const d = new Date();
@@ -5300,40 +5529,17 @@ function BoardView({ onBack }) {
       ? C.bronze
       : C.textMuted;
 
-  const [exporting, setExporting] = useState(false);
-  /* 匯出一律是全部項目，不跟下拉選單走；重讀最新分數而不是用看板的輪詢結果 */
-  const onExport = async () => {
-    setExporting(true);
-    try {
-      await exportResultsXlsx(groupsMeta, venuesConfig, athletes);
-    } catch (e) {
-      console.error("[匯出] 失敗", e);
-    } finally {
-      setExporting(false);
-    }
-  };
-
   return (
     <div style={{ minHeight: "100vh" }}>
       <TopBar title="成績看板" onBack={onBack} />
       <div style={{ padding: 20, maxWidth: 600, margin: "0 auto" }}>
-        <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <GroupPicker
-              groupKeys={groupKeys}
-              groupsMeta={groupsMeta}
-              value={gk}
-              onChange={setGk}
-            />
-          </div>
-          <Btn
-            onClick={onExport}
-            disabled={exporting || groupKeys.length === 0}
-            style={{ whiteSpace: "nowrap", flexShrink: 0 }}
-          >
-            <Download size={15} /> {exporting ? "匯出中…" : "匯出 Excel"}
-          </Btn>
-        </div>
+        {/* 匯出 Excel 移到總控台的「排名結果」分頁，看板只負責顯示。 */}
+        <GroupPicker
+          groupKeys={groupKeys}
+          groupsMeta={groupsMeta}
+          value={gk}
+          onChange={setGk}
+        />
 
         <div
           style={{
